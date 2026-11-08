@@ -1,0 +1,8 @@
+* text=auto
+*.patch text eol=lf
+*.patch -whitespace
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+VERSION text eol=lf
+Dockerfile text eol=lf

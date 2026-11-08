@@ -1,0 +1,46 @@
+{
+  "name": "Infinity Xray",
+  "status": "release-candidate",
+  "upstream": {
+    "repository": "https://github.com/XTLS/Xray-core.git",
+    "tag": "v26.10.31",
+    "commit": "a4a3dff5b20c2faae567b742c172c7b95e75c083"
+  },
+  "node_tag": "3.4.4",
+  "go_toolchain": "go1.27.3",
+  "build_tags": [
+    "http2legacy"
+  ],
+  "patch": {
+    "file": "infinity-xray.patch",
+    "sha256": "16cf1d6cb13a597809f55aadf7a33d3df9a4ef201260a009ea9f321c11abe3a3"
+  },
+  "components": [
+    {
+      "source": "0001-ic-keepalive-icstats.patch",
+      "sha256_lf": "aef4af0bd00df647600f1615652510386ebd03645d4b0379ea19cd1c5c3cb4d4"
+    },
+    {
+      "source": "0002-ic-mux-tcp-reality-validation.patch",
+      "sha256_lf": "07ae3b01a6412475980234f5de7213a9cca0d6c73ae580bd68a6029a283a1d0f"
+    },
+    {
+      "source": "lab/0003-h2flow.patch",
+      "sha256_lf": "e26e1a2de438adc4ac50604b41e9c43404d879cebfdbc8f578b7b2cc8442ed3f"
+    },
+    {
+      "source": "lab/0005-bounded-shutdown.patch",
+      "sha256_lf": "f08fc33a599711549ad1acd008b0dcab8855990d17a85595db2e001aed9baff3"
+    },
+    {
+      "source": "lab/0006-mux-write-diagnostics.patch",
+      "sha256_lf": "93b8a6d0b7073a20aeb98a84c54c0b0afba492af8c93af02466c4280c844952c"
+    }
+  ],
+  "excluded": [
+    {
+      "source": "lab/0004-revoke-users.patch",
+      "reason": "Node 3.4.4 performs remove/add during unchanged-user resync; forced revoke breaks existing sessions."
+    }
+  ]
+}
