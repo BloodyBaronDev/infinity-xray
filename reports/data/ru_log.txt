@@ -1,0 +1,51 @@
+before: load=0.75 tx=98Mbit tcp=3769 node=running/0
+1 off solo (0.0, 0.0, -1, -1) rounds 0
+1 off rival (0.0, 209.9, -1, -1) rounds 0
+1 off own4 (0.0, 0.0, -1, -1) rounds 0
+1 on solo (251.8, 0.0, 67, 81) rounds 0
+1 on rival (254.0, 158.4, 74, 88) rounds 0
+1 on own4 (0.0, 0.0, -1, -1) rounds 0
+1 compete solo (0.0, 0.0, -1, -1) rounds 0
+1 compete rival (0.0, 95.7, -1, -1) rounds 0
+1 compete own4 (284.4, 0.0, -1, -1) rounds 0
+health: load=0.86 tx=39Mbit tcp=3847 node=running/0
+2 off solo (0.0, 0.0, -1, -1) rounds 0
+2 off rival (0.0, 104.8, -1, -1) rounds 0
+2 off own4 (259.5, 0.0, -1, -1) rounds 0
+2 on solo (0.0, 0.0, -1, -1) rounds 0
+2 on rival (0.0, 230.3, -1, -1) rounds 0
+2 on own4 (0.0, 0.0, -1, -1) rounds 0
+2 compete solo (0.0, 0.0, -1, -1) rounds 0
+2 compete rival (0.0, 275.3, -1, -1) rounds 0
+2 compete own4 (146.1, 0.0, -1, -1) rounds 0
+health: load=0.73 tx=54Mbit tcp=4024 node=running/0
+3 off solo (0.0, 0.0, -1, -1) rounds 0
+3 off rival (0.0, 255.9, -1, -1) rounds 0
+3 off own4 (0.0, 0.0, 65, 72) rounds 0
+3 on solo (0.0, 0.0, -1, -1) rounds 0
+3 on rival (0.0, 261.9, -1, -1) rounds 0
+3 on own4 (508.0, 0.0, 71, 365) rounds 0
+3 compete solo (0.0, 0.0, -1, -1) rounds 0
+3 compete rival (0.0, 126.3, -1, -1) rounds 0
+3 compete own4 (0.0, 0.0, -1, -1) rounds 0
+health: load=1.25 tx=80Mbit tcp=3831 node=running/0
+4 off solo (0.0, 0.0, -1, -1) rounds 0
+4 off rival (0.0, 110.4, 1053, 1053) rounds 0
+4 off own4 (0.0, 0.0, -1, -1) rounds 0
+4 on solo (0.0, 0.0, -1, -1) rounds 0
+4 on rival (0.0, 0.1, -1, -1) rounds 0
+4 on own4 (0.0, 0.0, -1, -1) rounds 0
+4 compete solo (0.0, 0.0, -1, -1) rounds 0
+4 compete rival (0.0, 86.8, -1, -1) rounds 0
+4 compete own4 (0.0, 0.0, -1, -1) rounds 0
+health: load=0.69 tx=97Mbit tcp=3934 node=running/0
+--- features
+resync (expect 15s): (2.0, 0)
+removal (expect ~7s): (2.0, 0)
+limit 2 conns: [(2.0, 0)] [(2.0, 0)] third: [(2.0, 0)] rejected 0
+rate limit 5: (0.0, 0.0, -1, -1) waits 0
+rate limit 20: (0.0, 0.0, 1186, 1186) waits 0
+metrics: infinity_inbound_conns_active 0; infinity_user_conns_rejected_total 0; infinity_user_sessions_revoked_total 0; infinity_user_rate_waits_total 0; infinity_h2flow_conns_active 0; infinity_h2flow_conns_total 2; infinity_h2flow_compete_rounds_total 0
+drain: ((2.0, 0), 'listeners=0\nstopped_after=2s')
+after: load=0.57 tx=87Mbit tcp=3942 node=running/0
+cleanup: ufw_left=0 ports_left=0 dir_left=0 node=running/0

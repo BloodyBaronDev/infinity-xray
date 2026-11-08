@@ -80,7 +80,7 @@ def go_environment(release, target=None):
 def checks(source, release, full=False):
     env = go_environment(release)
     tags = ",".join(release["build_tags"])
-    packages = ["./common/icstats", "./common/mux", "./app/proxyman/inbound",
+    packages = ["./common/icstats", "./common/icusers", "./app/dispatcher", "./common/mux", "./app/proxyman/inbound",
                 "./transport/internet/reality", "./proxy/hysteria"]
     run(["go", "vet", "-tags", tags, *packages], cwd=source, env=env)
     run(["go", "test", "-tags", tags, "-count=1", "-timeout=3m", *packages], cwd=source, env=env)

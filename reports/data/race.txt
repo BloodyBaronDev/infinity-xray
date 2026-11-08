@@ -1,0 +1,8 @@
+go version go1.27.3 linux/amd64
+ok  	github.com/xtls/xray-core/common/icusers	1.133s
+ok  	github.com/xtls/xray-core/common/icstats	1.022s
+ok  	github.com/xtls/xray-core/common/mux	2.039s
+ok  	github.com/xtls/xray-core/app/dispatcher	1.521s
+ok  	github.com/xtls/xray-core/app/proxyman/inbound	1.032s
+ok  	github.com/xtls/xray-core/transport/internet/reality	1.026s
+ok  	github.com/xtls/xray-core/main	17.545s
