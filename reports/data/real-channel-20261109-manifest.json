@@ -1,0 +1,24 @@
+{
+  "datasets": [
+    {
+      "experiment": "candidate",
+      "rows": 80,
+      "source_sha256": "6f34279197c1c450f4989bb746869bac80a844a1a008d00f98472eeb746f9dcf"
+    },
+    {
+      "experiment": "vision",
+      "rows": 20,
+      "source_sha256": "4d3103b7d453e77330f460eae8813bb31b8e95f131a1fe6b7f92b8e0dd245d18"
+    },
+    {
+      "experiment": "hysteria-idle-policy",
+      "rows": 10,
+      "source_sha256": "a754053e9e322b3f6595e6a7dbc7540b831d95f223578e2421e6950fbd77660d"
+    }
+  ],
+  "public_csv_sha256": "d44aef9badf28053bfc841f70e859ce7b4229a3af3a18001dfa85208fadb7025",
+  "redactions": [
+    "IPv4 and UUID in notes"
+  ],
+  "raw_jsonl": "Сохранены локально в каталогах соответствующих измерений; в git не включены"
+}

@@ -4,5 +4,7 @@
 *.sh text eol=lf
 *.py text eol=lf
 *.json text eol=lf
+reports/data/real-channel-*.csv text eol=lf
+reports/data/*.jsonl text eol=lf
 VERSION text eol=lf
 Dockerfile text eol=lf

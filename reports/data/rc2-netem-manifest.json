@@ -1,0 +1,137 @@
+{
+  "sources": [
+    {
+      "experiment": "warm",
+      "rows": 40,
+      "sha256": "d1e3082e7e614e13c25904cd4e19b798188a1f3f9fec4dfa467884491e2e03df"
+    },
+    {
+      "experiment": "cold",
+      "rows": 20,
+      "sha256": "d6391962882a540240508ef350a53d01fbb707f374b076b16b66e57d433350ee"
+    }
+  ],
+  "epochs": [
+    {
+      "binaries": {
+        "old": "36ba23d17e48be4eccd906b0171688ca4bea5a377932beb2e402db430b5ed0c2",
+        "new": "c5797a9979301dcb3eb7ca377d2483d2073bef3cec7f34a7c57edfcdef4ef82e"
+      },
+      "client_sha256": "cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1",
+      "script_sha256": "cbcde7b2679e0d4a8143b6f65ec64bb77d08cf8226feba979315afe17ec1054d",
+      "epoch": "20261109T061300Z-102271",
+      "resumed_rows": 25,
+      "duration": 30,
+      "rtt_ms": 80,
+      "experiment": "warm",
+      "calibration": [
+        {
+          "rate": 100,
+          "rep": 1,
+          "received_mbit": 91.00773286383136
+        },
+        {
+          "rate": 100,
+          "rep": 2,
+          "received_mbit": 91.11224339912782
+        },
+        {
+          "rate": 100,
+          "rep": 3,
+          "received_mbit": 91.1117241136577
+        }
+      ]
+    },
+    {
+      "binaries": {
+        "old": "36ba23d17e48be4eccd906b0171688ca4bea5a377932beb2e402db430b5ed0c2",
+        "new": "c5797a9979301dcb3eb7ca377d2483d2073bef3cec7f34a7c57edfcdef4ef82e"
+      },
+      "client_sha256": "cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1",
+      "script_sha256": "7bcd0f84844e8ae6d02f73f19f47bd3f8d7db63497055306b3f88590ce70dea4",
+      "epoch": null,
+      "resumed_rows": null,
+      "duration": 30,
+      "rtt_ms": 80,
+      "experiment": "warm",
+      "calibration": [
+        {
+          "rate": 20,
+          "rep": 1,
+          "received_mbit": 18.663921174289968
+        },
+        {
+          "rate": 20,
+          "rep": 2,
+          "received_mbit": 18.663768137390285
+        },
+        {
+          "rate": 20,
+          "rep": 3,
+          "received_mbit": 18.662807048382916
+        },
+        {
+          "rate": 100,
+          "rep": 1,
+          "received_mbit": 91.6364245757547
+        },
+        {
+          "rate": 100,
+          "rep": 2,
+          "received_mbit": 91.53233705086097
+        },
+        {
+          "rate": 100,
+          "rep": 3,
+          "received_mbit": 91.5311472544561
+        }
+      ]
+    },
+    {
+      "binaries": {
+        "old": "36ba23d17e48be4eccd906b0171688ca4bea5a377932beb2e402db430b5ed0c2",
+        "new": "c5797a9979301dcb3eb7ca377d2483d2073bef3cec7f34a7c57edfcdef4ef82e"
+      },
+      "client_sha256": "cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1",
+      "script_sha256": "f048696e2bf9c8ba0d35864dbf93773f636565bd24e8a8e74e32b0ac6b940037",
+      "epoch": "20261109T062142Z-104754",
+      "resumed_rows": 0,
+      "duration": 30,
+      "rtt_ms": 80,
+      "experiment": "cold",
+      "calibration": [
+        {
+          "rate": 20,
+          "rep": 1,
+          "received_mbit": 18.558228885482066
+        },
+        {
+          "rate": 20,
+          "rep": 2,
+          "received_mbit": 18.557366040785265
+        },
+        {
+          "rate": 20,
+          "rep": 3,
+          "received_mbit": 18.55790600516867
+        },
+        {
+          "rate": 100,
+          "rep": 1,
+          "received_mbit": 90.7982646008715
+        },
+        {
+          "rate": 100,
+          "rep": 2,
+          "received_mbit": 90.48338620157017
+        },
+        {
+          "rate": 100,
+          "rep": 3,
+          "received_mbit": 90.37844833913178
+        }
+      ]
+    }
+  ],
+  "public_results_sha256": "f9a6468acc4d4a0a15287a9e349014beb458f0c4d9e4d52f287745753f245a85"
+}

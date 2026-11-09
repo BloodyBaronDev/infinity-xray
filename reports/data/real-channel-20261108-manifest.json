@@ -1,0 +1,34 @@
+{
+  "datasets": [
+    {
+      "experiment": "clean-full",
+      "rows": 80,
+      "source_sha256": "7177cff8b7e5d65ba3d5debd35d2b980f8f85b56ebdf08b84735b8d0c0cbf87f"
+    },
+    {
+      "experiment": "clean-xhttp-idle",
+      "rows": 20,
+      "source_sha256": "c149e7502a5663cb88cae8ebb8656d5f5f7f8abde1219f93f5fcbaa3266fe9f9"
+    },
+    {
+      "experiment": "clean-hysteria",
+      "rows": 10,
+      "source_sha256": "886ab1b9b691e0dd63d86a50253abd3ef747bacb86703bdfc4773b44e478ec82"
+    },
+    {
+      "experiment": "clean-raw",
+      "rows": 100,
+      "source_sha256": "0ec84d7225a25a1f4aee473d07eb7627b6d84c771228574ef59769e928782c36"
+    },
+    {
+      "experiment": "clean-hysteria8443",
+      "rows": 50,
+      "source_sha256": "5bd46fba6fffc1ecd95a4ef10f366f70306abdf14cfbc05038f29c5e4ee06efb"
+    }
+  ],
+  "public_csv_sha256": "a16e08c2e77b049de09f5b725d278b1b88f27b826af80ff7c047f5f122c40957",
+  "redactions": [
+    "IPv4 and UUID in notes"
+  ],
+  "raw_jsonl": "Сохранены локально в каталогах соответствующих измерений; в git не включены"
+}

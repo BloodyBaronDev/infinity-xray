@@ -2522,7 +2522,7 @@ index dac5f0f..99c3fa2 100644
  }
 diff --git a/transport/internet/splithttp/h2flow.go b/transport/internet/splithttp/h2flow.go
 new file mode 100644
-index 0000000..8683b0e
+index 0000000..0d6453f
 --- /dev/null
 +++ b/transport/internet/splithttp/h2flow.go
 @@ -0,0 +1,2450 @@
@@ -4948,7 +4948,7 @@ index 0000000..8683b0e
 +		if !c.floorConfirmed(now) {
 +			s.down.cap = min(s.down.cap, flowUnconfirmedDown)
 +		}
-+	case q == 2 && !c.noQueueCuts && now.Sub(s.down.qAt) >= c.currentRTT():
++	case q == 2 && !c.noQueueCuts && !(competing && s.down.foreign) && now.Sub(s.down.qAt) >= c.currentRTT():
 +		s.down.qAt = now
 +		before := s.down.cap
 +		// The quarter cut as it always was, before/4*3, scaled by the gain.
@@ -5746,6 +5746,73 @@ index 0000000..61563c1
 +		}
 +	}
 +	t.Logf("lowest cap seen: server %d, client %d", lowServer, lowClient)
++}
+diff --git a/transport/internet/splithttp/h2flow_compete_controller_test.go b/transport/internet/splithttp/h2flow_compete_controller_test.go
+new file mode 100644
+index 0000000..636081a
+--- /dev/null
++++ b/transport/internet/splithttp/h2flow_compete_controller_test.go
+@@ -0,0 +1,61 @@
++package splithttp
++
++import (
++	"testing"
++	"time"
++)
++
++// Проверяется весь цикл: PI и дополнительное ограничение длинной очереди.
++func TestFlowCompeteFullController(t *testing.T) {
++	for _, tc := range []struct {
++		name       string
++		enabled    bool
++		sibling    bool
++		start      int32
++		foreign    bool
++		wantGrowth bool
++	}{
++		{"foreign queue at floor", true, false, h2InitWindow, false, true},
++		{"own queue still shrinks", true, false, 1 << 20, false, false},
++		{"disabled still shrinks", false, false, 1 << 20, true, false},
++		{"sibling clears foreign state", true, true, 2 * h2InitWindow, true, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			old := flowCompete
++			flowCompete = tc.enabled
++			t.Cleanup(func() { flowCompete = old })
++			h, s := queuedDownload(t)
++			now := time.Unix(1000, 0)
++			h.c.mu.Lock()
++			defer h.c.mu.Unlock()
++			h.c.incremental = true
++			h.c.kstat = tcpStats{rtt: 600 * time.Millisecond, minRTT: 80 * time.Millisecond}
++			h.c.rttBase = h.c.kstat.minRTT
++			h.c.peers = joinFlowGroup("controller-test:" + t.Name())
++			h.c.peers.peers = map[*flowConn]*flowPeerRate{
++				h.c: {at: now, rate: 1 << 20, rated: now},
++			}
++			if tc.sibling {
++				h.c.peers.peers[&flowConn{}] = &flowPeerRate{at: now, rate: 1 << 20, rated: now}
++			}
++			s.down.cap, s.down.foreign = tc.start, tc.foreign
++			s.down.flat = flowFullRounds
++			s.down.mark, s.down.markBase = now.Add(-h.c.kstat.rtt), s.down.returned
++			s.down.returned += int64(tc.start)
++			h.c.governDown(now, s)
++			if tc.wantGrowth {
++				if !s.down.foreign || !s.down.competing {
++					t.Fatal("чужая очередь не распознана: неверные условия теста")
++				}
++				if s.down.cap <= tc.start {
++					t.Fatalf("после полного цикла окно %d не выросло от %d", s.down.cap, tc.start)
++				}
++			} else if s.down.cap >= tc.start {
++				t.Fatalf("защита собственной очереди не уменьшила окно %d: %d", tc.start, s.down.cap)
++			}
++			if tc.sibling && s.down.foreign {
++				t.Fatal("после появления второй загрузки остался признак чужой очереди")
++			}
++		})
++	}
 +}
 diff --git a/transport/internet/splithttp/h2flow_compete_test.go b/transport/internet/splithttp/h2flow_compete_test.go
 new file mode 100644
@@ -16957,3 +17024,524 @@ index 5ec3173..c50558d 100644
  		go func() {
  			if err := l.server.Serve(l.listener); err != nil {
  				errors.LogErrorInner(ctx, err, "failed to serve HTTP for XHTTP")
+diff --git a/transport/internet/splithttp/splithttp_test.go b/transport/internet/splithttp/splithttp_test.go
+index 434108f..9f9a651 100644
+--- a/transport/internet/splithttp/splithttp_test.go
++++ b/transport/internet/splithttp/splithttp_test.go
+@@ -248,7 +248,7 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 		},
+ 	}
+ 
+-	serverClosed := false
++	serverClosed := make(chan struct{}, 1)
+ 	listen, err := ListenXH(context.Background(), net.LocalHostIP, listenPort, streamSettings, func(conn stat.Connection) {
+ 		go func() {
+ 			defer conn.Close()
+@@ -264,7 +264,10 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 				common.Must2(conn.Write(b.Bytes()))
+ 			}
+ 
+-			serverClosed = true
++			select {
++			case serverClosed <- struct{}{}:
++			default:
++			}
+ 		}()
+ 	})
+ 	common.Must(err)
+@@ -297,8 +300,9 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 	}
+ 
+ 	conn.Close()
+-	time.Sleep(100 * time.Millisecond)
+-	if !serverClosed {
++	select {
++	case <-serverClosed:
++	case <-time.After(time.Second):
+ 		t.Error("server did not get closed")
+ 	}
+ 
+diff --git a/transport/internet/tls/certificate_store.go b/transport/internet/tls/certificate_store.go
+new file mode 100644
+index 0000000..797253c
+--- /dev/null
++++ b/transport/internet/tls/certificate_store.go
+@@ -0,0 +1,91 @@
++package tls
++
++import (
++	"bytes"
++	"crypto/tls"
++	"crypto/x509"
++	"fmt"
++	"sync"
++	"sync/atomic"
++
++	"github.com/xtls/xray-core/common/platform/filesystem"
++	"google.golang.org/protobuf/proto"
++)
++
++// Опубликованный снимок не меняется: handshake может держать его после reload.
++type certificateSource struct {
++	current atomic.Pointer[Certificate]
++	stop    chan struct{}
++	once    sync.Once
++}
++
++func newCertificateSource(entry *Certificate) *certificateSource {
++	source := &certificateSource{stop: make(chan struct{})}
++	source.current.Store(proto.Clone(entry).(*Certificate))
++	return source
++}
++
++func (s *certificateSource) load() *Certificate { return s.current.Load() }
++
++func (s *certificateSource) close() { s.once.Do(func() { close(s.stop) }) }
++
++func (s *certificateSource) reload() (bool, error) {
++	previous := s.load()
++	if previous.CertificatePath == "" || previous.KeyPath == "" {
++		return false, nil
++	}
++	certificate, err := filesystem.ReadCert(previous.CertificatePath)
++	if err != nil {
++		return false, err
++	}
++	key, err := filesystem.ReadCert(previous.KeyPath)
++	if err != nil {
++		return false, err
++	}
++	if bytes.Equal(certificate, previous.Certificate) && bytes.Equal(key, previous.Key) {
++		return false, nil
++	}
++	// Во время замены двух файлов может временно появиться несовпадающая пара.
++	if _, err := tls.X509KeyPair(certificate, key); err != nil {
++		return false, fmt.Errorf("invalid reloaded certificate pair: %w", err)
++	}
++	next := proto.Clone(previous).(*Certificate)
++	next.Certificate, next.Key = certificate, key
++	s.current.Store(next)
++	return true, nil
++}
++
++type certificateStore struct {
++	entries []*atomic.Pointer[tls.Certificate]
++	sources []*certificateSource
++}
++
++func (s *certificateStore) add(certificate *tls.Certificate, source *certificateSource) *atomic.Pointer[tls.Certificate] {
++	entry := new(atomic.Pointer[tls.Certificate])
++	entry.Store(certificate)
++	s.entries = append(s.entries, entry)
++	s.sources = append(s.sources, source)
++	return entry
++}
++
++func (s *certificateStore) snapshot() []*tls.Certificate {
++	certificates := make([]*tls.Certificate, len(s.entries))
++	for index, entry := range s.entries {
++		certificates[index] = entry.Load()
++	}
++	return certificates
++}
++
++func (s *certificateStore) close() {
++	for _, source := range s.sources {
++		source.close()
++	}
++}
++
++func clonePublishedCertificate(certificate *tls.Certificate) *tls.Certificate {
++	copy := *certificate
++	if copy.Leaf == nil && len(copy.Certificate) > 0 {
++		copy.Leaf, _ = x509.ParseCertificate(copy.Certificate[0])
++	}
++	return &copy
++}
+diff --git a/transport/internet/tls/certificate_store_test.go b/transport/internet/tls/certificate_store_test.go
+new file mode 100644
+index 0000000..b5cd501
+--- /dev/null
++++ b/transport/internet/tls/certificate_store_test.go
+@@ -0,0 +1,154 @@
++package tls
++
++import (
++	"bytes"
++	gotls "crypto/tls"
++	"crypto/x509"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/protocol/tls/cert"
++	"google.golang.org/protobuf/proto"
++)
++
++func snapshotTestCertificate(t *testing.T, name string) *Certificate {
++	t.Helper()
++	generated, _ := cert.MustGenerate(nil, cert.CommonName(name), cert.DNSNames(name))
++	entry := ParseCertificate(generated)
++	entry.OneTimeLoading = true
++	return entry
++}
++
++func writeSnapshotPair(t *testing.T, entry *Certificate, certificate, key string) {
++	t.Helper()
++	if err := os.WriteFile(certificate, entry.Certificate, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(key, entry.Key, 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestCertificateSourceKeepsLastValidPair(t *testing.T) {
++	first := snapshotTestCertificate(t, "first.test")
++	second := snapshotTestCertificate(t, "second.test")
++	directory := t.TempDir()
++	first.CertificatePath, first.KeyPath = filepath.Join(directory, "cert.pem"), filepath.Join(directory, "key.pem")
++	writeSnapshotPair(t, first, first.CertificatePath, first.KeyPath)
++	original := proto.Clone(first)
++	source := newCertificateSource(first)
++	defer source.close()
++	if err := os.WriteFile(first.CertificatePath, second.Certificate, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err == nil || changed {
++		t.Fatalf("несовпадающая пара опубликована: changed=%v err=%v", changed, err)
++	}
++	if !bytes.Equal(source.load().Certificate, first.Certificate) {
++		t.Fatal("последний рабочий сертификат потерян")
++	}
++	if err := os.WriteFile(first.KeyPath, second.Key, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err != nil || !changed {
++		t.Fatalf("новая корректная пара не загружена: changed=%v err=%v", changed, err)
++	}
++	if !bytes.Equal(source.load().Certificate, second.Certificate) || !proto.Equal(first, original) {
++		t.Fatal("обновление потеряно или изменило исходный proto-конфиг")
++	}
++	if err := os.Remove(first.CertificatePath); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err == nil || changed {
++		t.Fatal("исчезнувший файл заменил рабочий снимок")
++	}
++	if !bytes.Equal(source.load().Certificate, second.Certificate) {
++		t.Fatal("ошибка чтения сбросила рабочий снимок")
++	}
++}
++
++func TestCertificateStoreHotReloadConcurrentSelection(t *testing.T) {
++	first := snapshotTestCertificate(t, "first.test")
++	second := snapshotTestCertificate(t, "second.test")
++	directory := t.TempDir()
++	first.CertificatePath, first.KeyPath = filepath.Join(directory, "cert.pem"), filepath.Join(directory, "key.pem")
++	first.OneTimeLoading, first.OcspStapling = false, 1
++	writeSnapshotPair(t, first, first.CertificatePath, first.KeyPath)
++	original := proto.Clone(first)
++	store := (&Config{Certificate: []*Certificate{first}}).buildCertificateStore()
++	defer store.close()
++	selectCertificate := getNewGetCertificateFunc(store, false)
++	old, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "first.test"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	stop := make(chan struct{})
++	var workers sync.WaitGroup
++	for range 8 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for {
++				select {
++				case <-stop:
++					return
++				default:
++				}
++				certificate, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "first.test"})
++				if err != nil || certificate.Leaf == nil || len(certificate.Certificate) == 0 {
++					t.Error("выбор сертификата потерял целостный снимок")
++					return
++				}
++			}
++		}()
++	}
++	defer func() { close(stop); workers.Wait() }()
++	writeSnapshotPair(t, second, first.CertificatePath, first.KeyPath)
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		current, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "second.test"})
++		if err == nil && current.Leaf.Subject.CommonName == "second.test" {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("watcher не опубликовал новый сертификат")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if old.Leaf.Subject.CommonName != "first.test" || !proto.Equal(first, original) {
++		t.Fatal("reload изменил опубликованный сертификат или исходный конфиг")
++	}
++}
++
++func TestCertificateIssuingKeepsTLSConfigImmutable(t *testing.T) {
++	generated, _ := cert.MustGenerate(nil, cert.Authority(true), cert.KeyUsage(x509.KeyUsageCertSign))
++	entry := ParseCertificate(generated)
++	entry.Usage, entry.OneTimeLoading = Certificate_AUTHORITY_ISSUE, true
++	tlsConfig := (&Config{Certificate: []*Certificate{entry}}).GetTLSConfig()
++	var workers sync.WaitGroup
++	for worker := range 8 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for request := range 12 {
++				certificate, err := tlsConfig.GetCertificate(&gotls.ClientHelloInfo{
++					ServerName: fmt.Sprintf("%d-%d.test", worker, request),
++				})
++				if err != nil || certificate.Leaf == nil {
++					t.Errorf("выдача сертификата: %v", err)
++					return
++				}
++				// crypto/tls читает эти поля параллельно с callback.
++				if len(tlsConfig.Certificates) != 0 || len(tlsConfig.NameToCertificate) != 0 {
++					t.Error("callback изменил общий tls.Config")
++					return
++				}
++			}
++		}()
++	}
++	workers.Wait()
++}
+diff --git a/transport/internet/tls/config.go b/transport/internet/tls/config.go
+index 71bd6ce..e028260 100644
+--- a/transport/internet/tls/config.go
++++ b/transport/internet/tls/config.go
+@@ -16,7 +16,6 @@ import (
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/ocsp"
+-	"github.com/xtls/xray-core/common/platform/filesystem"
+ 	"github.com/xtls/xray-core/common/protocol/tls/cert"
+ 	"github.com/xtls/xray-core/transport/internet"
+ 	"golang.org/x/crypto/x509roots/fallback/bundle"
+@@ -46,15 +45,23 @@ func (c *Config) loadSelfCertPool() (*x509.CertPool, error) {
+ 	return root, nil
+ }
+ 
+-// BuildCertificates builds a list of TLS certificates from proto definition.
++// BuildCertificates возвращает неизменяемый снимок. Живое обновление использует GetTLSConfig.
+ func (c *Config) BuildCertificates() []*tls.Certificate {
+-	certs := make([]*tls.Certificate, 0, len(c.Certificate))
++	store := c.buildCertificateStore()
++	defer store.close()
++	return store.snapshot()
++}
++
++func (c *Config) buildCertificateStore() *certificateStore {
++	store := new(certificateStore)
+ 	for _, entry := range c.Certificate {
+-		if entry.Usage != Certificate_ENCIPHERMENT {
++		if entry == nil || entry.Usage != Certificate_ENCIPHERMENT {
+ 			continue
+ 		}
++		source := newCertificateSource(entry)
+ 		getX509KeyPair := func() *tls.Certificate {
+-			keyPair, err := tls.X509KeyPair(entry.Certificate, entry.Key)
++			current := source.load()
++			keyPair, err := tls.X509KeyPair(current.Certificate, current.Key)
+ 			if err != nil {
+ 				errors.LogWarningInner(context.Background(), err, "ignoring invalid X509 key pair")
+ 				return nil
+@@ -66,14 +73,14 @@ func (c *Config) BuildCertificates() []*tls.Certificate {
+ 			}
+ 			return &keyPair
+ 		}
+-		if keyPair := getX509KeyPair(); keyPair != nil {
+-			certs = append(certs, keyPair)
+-		} else {
++		keyPair := getX509KeyPair()
++		if keyPair == nil {
++			source.close()
+ 			continue
+ 		}
+-		index := len(certs) - 1
+-		setupOcspTicker(entry, func(isReloaded, isOcspstapling bool) {
+-			cert := certs[index]
++		slot := store.add(keyPair, source)
++		setupOcspTicker(source, func(isReloaded, isOcspstapling bool) {
++			cert := slot.Load()
+ 			if isReloaded {
+ 				if newKeyPair := getX509KeyPair(); newKeyPair != nil {
+ 					cert = newKeyPair
+@@ -85,20 +92,23 @@ func (c *Config) BuildCertificates() []*tls.Certificate {
+ 				if newOCSPData, err := ocsp.GetOCSPForCert(cert.Certificate); err != nil {
+ 					errors.LogWarningInner(context.Background(), err, "ignoring invalid OCSP")
+ 				} else if string(newOCSPData) != string(cert.OCSPStaple) {
+-					cert.OCSPStaple = newOCSPData
++					next := clonePublishedCertificate(cert)
++					next.OCSPStaple = bytes.Clone(newOCSPData)
++					cert = next
+ 				}
+ 			}
+-			certs[index] = cert
++			slot.Store(cert)
+ 		})
+ 	}
+-	return certs
++	return store
+ }
+ 
+-func setupOcspTicker(entry *Certificate, callback func(isReloaded, isOcspstapling bool)) {
++func setupOcspTicker(source *certificateSource, callback func(isReloaded, isOcspstapling bool)) {
++	entry := source.load()
++	if entry.OneTimeLoading || (entry.OcspStapling == 0 && (entry.CertificatePath == "" || entry.KeyPath == "")) {
++		return
++	}
+ 	go func() {
+-		if entry.OneTimeLoading {
+-			return
+-		}
+ 		var isOcspstapling bool
+ 		hotReloadCertInterval := uint64(3600)
+ 		if entry.OcspStapling != 0 {
+@@ -106,27 +116,25 @@ func setupOcspTicker(entry *Certificate, callback func(isReloaded, isOcspstaplin
+ 			isOcspstapling = true
+ 		}
+ 		t := time.NewTicker(time.Duration(hotReloadCertInterval) * time.Second)
++		defer t.Stop()
+ 		for {
+-			var isReloaded bool
+-			if entry.CertificatePath != "" && entry.KeyPath != "" {
+-				newCert, err := filesystem.ReadCert(entry.CertificatePath)
+-				if err != nil {
+-					errors.LogErrorInner(context.Background(), err, "failed to parse certificate")
+-					return
+-				}
+-				newKey, err := filesystem.ReadCert(entry.KeyPath)
+-				if err != nil {
+-					errors.LogErrorInner(context.Background(), err, "failed to parse key")
+-					return
+-				}
+-				if string(newCert) != string(entry.Certificate) || string(newKey) != string(entry.Key) {
+-					entry.Certificate = newCert
+-					entry.Key = newKey
+-					isReloaded = true
+-				}
++			select {
++			case <-source.stop:
++				return
++			default:
++			}
++			isReloaded, err := source.reload()
++			if err != nil {
++				errors.LogWarningInner(context.Background(), err, "keeping previous TLS certificate")
++			}
++			if isReloaded || isOcspstapling {
++				callback(isReloaded, isOcspstapling)
++			}
++			select {
++			case <-t.C:
++			case <-source.stop:
++				return
+ 			}
+-			callback(isReloaded, isOcspstapling)
+-			<-t.C
+ 		}
+ 	}()
+ }
+@@ -159,18 +167,30 @@ func issueCertificate(rawCA *Certificate, domain string) (*tls.Certificate, erro
+ 	return &cert, err
+ }
+ 
+-func (c *Config) getCustomCA() []*Certificate {
+-	certs := make([]*Certificate, 0, len(c.Certificate))
++func (c *Config) getCustomCA() []*certificateSource {
++	certs := make([]*certificateSource, 0, len(c.Certificate))
+ 	for _, certificate := range c.Certificate {
+-		if certificate.Usage == Certificate_AUTHORITY_ISSUE {
+-			certs = append(certs, certificate)
+-			setupOcspTicker(certificate, func(isReloaded, isOcspstapling bool) {})
++		if certificate != nil && certificate.Usage == Certificate_AUTHORITY_ISSUE {
++			source := newCertificateSource(certificate)
++			certs = append(certs, source)
++			setupOcspTicker(source, func(isReloaded, isOcspstapling bool) {})
+ 		}
+ 	}
+ 	return certs
+ }
+ 
+-func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++func getGetCertificateFunc(c *tls.Config, ca []*certificateSource) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++	// Кэш выдачи приватный: crypto/tls параллельно читает исходный Config.
++	names := c.NameToCertificate
++	c = c.Clone()
++	c.Certificates = slices.Clone(c.Certificates)
++	for index := range c.Certificates {
++		c.Certificates[index] = *clonePublishedCertificate(&c.Certificates[index])
++	}
++	c.NameToCertificate = make(map[string]*tls.Certificate, len(names))
++	for name, certificate := range names {
++		c.NameToCertificate[name] = clonePublishedCertificate(certificate)
++	}
+ 	var access sync.RWMutex
+ 
+ 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+@@ -178,6 +198,11 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		certExpired := false
+ 
+ 		access.RLock()
++		if domain == "" && len(c.Certificates) > 0 {
++			certificate := &c.Certificates[0]
++			access.RUnlock()
++			return certificate, nil
++		}
+ 		certificate, found := c.NameToCertificate[domain]
+ 		access.RUnlock()
+ 
+@@ -189,9 +214,8 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		}
+ 
+ 		if certExpired {
+-			newCerts := make([]tls.Certificate, 0, len(c.Certificates))
+-
+ 			access.Lock()
++			newCerts := make([]tls.Certificate, 0, len(c.Certificates))
+ 			for _, certificate := range c.Certificates {
+ 				if !isCertificateExpired(&certificate) {
+ 					newCerts = append(newCerts, certificate)
+@@ -208,7 +232,8 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		var issuedCertificate *tls.Certificate
+ 
+ 		// Create a new certificate from existing CA if possible
+-		for _, rawCert := range ca {
++		for _, source := range ca {
++			rawCert := source.load()
+ 			if rawCert.Usage == Certificate_AUTHORITY_ISSUE {
+ 				newCert, err := issueCertificate(rawCert, domain)
+ 				if err != nil {
+@@ -244,8 +269,9 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 	}
+ }
+ 
+-func getNewGetCertificateFunc(certs []*tls.Certificate, rejectUnknownSNI bool) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++func getNewGetCertificateFunc(store *certificateStore, rejectUnknownSNI bool) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+ 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++		certs := store.snapshot()
+ 		if len(certs) == 0 {
+ 			return nil, errNoCertificates
+ 		}
+@@ -412,7 +438,7 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
+ 	if len(caCerts) > 0 {
+ 		config.GetCertificate = getGetCertificateFunc(config, caCerts)
+ 	} else {
+-		config.GetCertificate = getNewGetCertificateFunc(c.BuildCertificates(), c.RejectUnknownSni)
++		config.GetCertificate = getNewGetCertificateFunc(c.buildCertificateStore(), c.RejectUnknownSni)
+ 	}
+ 
+ 	if sn := c.parseServerName(); len(sn) > 0 {
