@@ -6,7 +6,7 @@
     "tag": "v26.11.9",
     "commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9"
   },
-  "node_tag": "3.4.4",
+  "node_tag": "3.4.5",
   "go_toolchain": "go1.27.3",
   "build_tags": [
     "http2legacy"
