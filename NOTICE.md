@@ -5,7 +5,7 @@ Infinity Xray — набор серверных изменений к [XTLS/Xray
 
 ## База
 
-- XTLS/Xray-core, тег `v26.10.31`.
+- XTLS/Xray-core, тег `v26.11.9`.
 - Commit: `a4a3dff5b20c2faae567b742c172c7b95e75c083`.
 - Лицензия исходников и объединённого патча: Mozilla Public License 2.0;
   полный текст находится в `LICENSE`.

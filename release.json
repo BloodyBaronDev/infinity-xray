@@ -3,8 +3,8 @@
   "status": "release-candidate",
   "upstream": {
     "repository": "https://github.com/XTLS/Xray-core.git",
-    "tag": "v26.10.31",
-    "commit": "a4a3dff5b20c2faae567b742c172c7b95e75c083"
+    "tag": "v26.11.9",
+    "commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9"
   },
   "node_tag": "3.4.4",
   "go_toolchain": "go1.27.3",
@@ -13,7 +13,7 @@
   ],
   "patch": {
     "file": "infinity-xray.patch",
-    "sha256": "bd242aeeae77f430129865b7ab14b3d6798e637b593cc51ff47c5c445fbfa3f1"
+    "sha256": "c9d3b56effab6ad5466745bc0f6422ced4413f3804f37bcb3ea89a995a3ec4af"
   },
   "components": [
     {

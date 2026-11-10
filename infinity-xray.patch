@@ -210,10 +210,10 @@ index 70edbef..bb5d3fb 100644
  	return h.tag
  }
 diff --git a/app/proxyman/inbound/inbound.go b/app/proxyman/inbound/inbound.go
-index c0ced47..1727744 100644
+index 62b2a7c..dcf2cd2 100644
 --- a/app/proxyman/inbound/inbound.go
 +++ b/app/proxyman/inbound/inbound.go
-@@ -174,7 +174,8 @@ func NewHandler(ctx context.Context, config *core.InboundHandlerConfig) (inbound
+@@ -184,7 +184,8 @@ func NewHandler(ctx context.Context, config *core.InboundHandlerConfig) (inbound
  			Mark: streamSettings.SocketSettings.Mark,
  		})
  	}
@@ -1262,7 +1262,7 @@ index 0000000..7509e86
 +	}
 +}
 diff --git a/common/mux/server.go b/common/mux/server.go
-index c23a378..68e21a7 100644
+index 8dd48a1..e8515b4 100644
 --- a/common/mux/server.go
 +++ b/common/mux/server.go
 @@ -3,11 +3,13 @@ package mux
@@ -1336,13 +1336,13 @@ index c23a378..68e21a7 100644
  func NewServerWorker(ctx context.Context, d routing.Dispatcher, link *transport.Link) (*ServerWorker, error) {
  	worker := &ServerWorker{
  		dispatcher:     d,
--		link:           link,
+-		link:           &transport.Link{Reader: link.Reader, Writer: &MutexWriter{Writer: link.Writer}},
  		sessionManager: NewSessionManager(),
  		done:           done.New(),
  		timer:          time.NewTicker(60 * time.Second),
  	}
 +	worker.lastWrite.Store(time.Now().UnixNano())
-+	worker.link = &transport.Link{Reader: link.Reader, Writer: &activityWriter{Writer: link.Writer, last: &worker.lastWrite}}
++	worker.link = &transport.Link{Reader: link.Reader, Writer: &activityWriter{Writer: &MutexWriter{Writer: link.Writer}, last: &worker.lastWrite}}
  	if inbound := session.InboundFromContext(ctx); inbound != nil {
  		inbound.CanSpliceCopy = 3
  	}
@@ -1354,9 +1354,9 @@ index c23a378..68e21a7 100644
  	return worker, nil
  }
  
-+// keepAlive: IC-форк. Если клиенту ничего не писали дольше интервала, шлёт пустой кадр
-+// KeepAlive, чтобы CDN не закрыл тихий поток скачивания XHTTP. Стандартный клиент кадр
-+// отбрасывает. Интервал — XRAY_IC_MUX_KEEPALIVE, секунды (по умолчанию 5, 0 — выключить).
++// keepAlive: IC-форк. Если клиенту ничего не писали дольше интервала, шлёт пустой
++// KeepAlive, чтобы CDN не закрыл тихий поток скачивания XHTTP. Стандартный клиент его
++// отбрасывает. Интервал — XRAY_IC_MUX_KEEPALIVE, секунды (по умолчанию 5, 0 — выключено).
 +func (w *ServerWorker) keepAlive() {
 +	defer icstats.MuxWorkersActive.Add(-1)
 +	sec := icstats.EnvSeconds("XRAY_IC_MUX_KEEPALIVE", 5)
