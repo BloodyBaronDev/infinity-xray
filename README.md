@@ -3,14 +3,11 @@
 **Серверная сборка Xray: тихие соединения живут дольше, XHTTP отзывчивее под нагрузкой.**
 Работает со стандартными клиентами, в основе — официальный [XTLS/Xray-core](https://github.com/XTLS/Xray-core).
 
-![Статус](https://img.shields.io/badge/статус-release%20candidate-orange)
-![Версия](https://img.shields.io/badge/версия-0.2.0--rc.3-blue)
+![Статус](https://img.shields.io/badge/статус-стабильный-brightgreen)
+![Версия](https://img.shields.io/badge/версия-0.2.0-blue)
 ![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational)
 ![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8)
 ![Лицензия](https://img.shields.io/badge/лицензия-MPL%202.0-green)
-
-> ⚠️ **Это кандидат релиза.** Перед установкой на рабочие ноды объединённой сборке нужны
-> полный Linux-прогон и проверка итогового Docker-образа. [Что уже проверено →](TEST_RESULTS.md)
 
 ## ✨ Что внутри
 
@@ -60,7 +57,7 @@ bash build.sh image          # плюс локальный образ для Rem
 ```
 
 На Windows: `python build.py build`.
-Результат: `out/0.2.0-rc.3/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`).
+Результат: `out/0.2.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`).
 Сценарии ничего не устанавливают и не публикуют.
 
 ## ⚙️ Настройки

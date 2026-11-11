@@ -29,7 +29,7 @@ python build.py build --target windows/amd64
 Для полноценной проверки серверного поведения предпочтителен Linux.
 Внешние `GOOS`, `GOARCH` и `GOFLAGS` не переносятся в проверки.
 
-Выходные файлы Linux находятся в `out/0.2.0-rc.3/linux-amd64/`:
+Выходные файлы Linux находятся в `out/0.2.0/linux-amd64/`:
 
 - `xray` — бинарник;
 - `SHA256SUMS` — его SHA256;
@@ -38,7 +38,7 @@ python build.py build --target windows/amd64
 Версия в выводе `xray version` выглядит так:
 
 ```text
-Xray 26.11.9 (...) Infinity-Xray/v0.2.0-rc.3 (go1.27.3 linux/amd64)
+Xray 26.11.9 (...) Infinity-Xray/v0.2.0 (go1.27.3 linux/amd64)
 ```
 
 Исходники создаются в новом `.work/infinity-xray-*/source`. Старые каталоги
@@ -176,7 +176,7 @@ icstats, mux, dispatcher, inbound, REALITY и процессные тесты о
 ## Docker и установка на ноду
 
 Команда `python3 build.py image` создаёт локальный образ
-`infinity-xray:0.2.0-rc.3-node3.4.5` поверх `remnawave/node:3.4.5`.
+`infinity-xray:0.2.0-node3.4.5` поверх `remnawave/node:3.4.5`.
 Она не отправляет образ в registry и не меняет работающие контейнеры.
 Бинарник заменяет `/usr/local/bin/xray`; штатный `rw-core` использует его.
 Тег базового Docker-образа закреплён, digest пока не закреплён.

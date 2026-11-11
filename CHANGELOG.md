@@ -1,5 +1,11 @@
 # История Infinity Xray
 
+## 0.2.0 — 2026-11-11
+
+- Стабильный выпуск на коде 0.2.0-rc.3: Xray-core v26.11.9, образ на `remnawave/node:3.4.5`.
+- Проверено на рабочей ноде за L4-реле (XHTTP + REALITY, Hysteria2): 0 рестартов, около 32% одного ядра при ~130 Мбит/с, governor срабатывает, метрики и icstats работают. Отчёт: `reports/0.2.0-rc.3-node-report.md`.
+- A/B-сравнения с 0.1.0 на одной ноде нет. `XRAY_XHTTP_FLOW_COMPETE` остаётся экспериментальным.
+
 ## 0.2.0-rc.3 — 2026-11-09
 
 - Патч перенесён на Xray-core v26.11.9. В `common/mux/server.go` запись mux объединена с новым `MutexWriter` upstream; учёт активности и keepalive сохранены.
