@@ -1,0 +1,56 @@
+# Публикует образ Remnawave Node с Infinity Xray в GHCR из бинарника релиза.
+name: image
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза, например v0.2.0"
+        required: true
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      PRERELEASE: ${{ github.event.release.prerelease || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Download and verify binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir ctx
+          gh release download "$TAG" -p xray-linux-amd64 -p SHA256SUMS -D ctx
+          cd ctx && grep -E ' [*]?xray-linux-amd64$' SHA256SUMS | sha256sum -c - && mv xray-linux-amd64 xray && chmod +x xray
+      - name: Tags
+        id: meta
+        run: |
+          v="${TAG#v}"; node=$(jq -r .node_tag release.json)
+          img="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags="$img:$v,$img:$v-node$node"
+          case "$v" in *-*) ;; *) [ "$PRERELEASE" = true ] || tags="$tags,$img:latest";; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "node=$node" >> "$GITHUB_OUTPUT"; echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            NODE_TAG=${{ steps.meta.outputs.node }}
+            INFINITY_VERSION=${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Remnawave Node with Infinity Xray (patched Xray-core)

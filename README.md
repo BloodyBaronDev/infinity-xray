@@ -1,105 +1,106 @@
 # ⚡ Infinity Xray
 
-**Серверная сборка Xray: тихие соединения живут дольше, XHTTP отзывчивее под нагрузкой.**
-Работает со стандартными клиентами, в основе — официальный [XTLS/Xray-core](https://github.com/XTLS/Xray-core).
+**English** · [Русский](README.ru.md)
 
-![Статус](https://img.shields.io/badge/статус-стабильный-brightgreen)
-![Версия](https://img.shields.io/badge/версия-0.2.0-blue)
+**A server-side Xray build: idle connections live longer, XHTTP stays responsive under load.**
+Drop-in replacement for the Xray inside [Remnawave Node](https://github.com/remnawave/node). Works with stock clients. Based on the official [XTLS/Xray-core](https://github.com/XTLS/Xray-core).
+
+![Status](https://img.shields.io/badge/status-stable-brightgreen)
+[![Release](https://img.shields.io/github/v/release/BloodyBaronDev/infinity-xray)](https://github.com/BloodyBaronDev/infinity-xray/releases/latest)
 ![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational)
 ![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8)
-![Лицензия](https://img.shields.io/badge/лицензия-MPL%202.0-green)
+![License](https://img.shields.io/badge/license-MPL%202.0-green)
+[![Stars](https://img.shields.io/github/stars/BloodyBaronDev/infinity-xray?style=social)](https://github.com/BloodyBaronDev/infinity-xray/stargazers)
 
-## ✨ Что внутри
+## 🐳 Quick install (Remnawave Node)
 
-| | Функция | Что даёт | Ограничения | Тесты |
-|---|---|---|---|---|
-| 💓 | **Hysteria keepalive** | Сервер сам шлёт QUIC keepalive в тишине | Мёртвых клиентов по-прежнему закрывают таймауты QUIC | [результаты](TEST_RESULTS.md#keepalive-стенд-3) |
-| 🔁 | **Mux keepalive** | Пустые кадры Mux.Cool держат тихий downlink через CDN | Нужен mux на клиенте | [результаты](TEST_RESULTS.md#keepalive-стенд-3) |
-| 🧩 | **Mux поверх XHTTP** | Снят серверный запрет | Для MASQUE запрет сохранён | [простой](TEST_RESULTS.md#простой-на-010-rc1-стенд-2) |
-| 🚦 | **HTTP/2 governor** | Меньше задержка соседних запросов под нагрузкой | Больше CPU, уступает полосу конкурирующему TCP | [результаты](TEST_RESULTS.md#governor-http2-стенд-1) |
-| 🛑 | **Ограниченная остановка** | До 7 с на Close и до 1 с на сообщение об ошибке | — | [результаты](TEST_RESULTS.md#целостность-и-остановка-стенд-1) |
-| 📊 | **icstats** | Счётчики Hysteria и mux без содержимого трафика | Соединения без mux не измеряются | [результаты](TEST_RESULTS.md#диагностика-записей-mux) |
-| 🔐 | **Проверка REALITY** | Ошибочные ключи и short ID отклоняются до запуска слушателя | — | — |
-| 🧱 | **TCP-only Mux.Cool** | UDP к `v1.mux.cool` идёт обычной маршрутизацией | — | — |
-| ⏳ | **Отзыв VLESS с отсрочкой** | Соединения удалённого пользователя закрываются, если ключ не вернулся | Выключен; только VLESS | [rc.1](reports/0.2.0-rc.1-test-report.md) |
-| 🚧 | **Лимиты на пользователя** | Предел соединений VLESS и общей скорости на email | Выключены; одно значение на всех; Vision без splice | [rc.1](reports/0.2.0-rc.1-test-report.md) |
-| 📈 | **Метрики Prometheus** | Агрегаты без пользователей и адресов | Выключены; авторизации нет | [rc.1](reports/0.2.0-rc.1-test-report.md) |
-| 🌙 | **Плавная остановка** | Принятые соединения дорабатывают до срока | Выключена; не для QUIC | [rc.1](reports/0.2.0-rc.1-test-report.md) |
-| ⏱ | **Сторож запуска** | Зависший Start завершает процесс с кодом 1 | — | — |
+Change one line in your node's `docker-compose.yml`. Ports and secrets stay the same:
 
-Безусловный отзыв не включён: Remnawave Node делает remove/add даже для неизменённого
-пользователя, поэтому отзыв работает только с отсрочкой `XRAY_IC_REVOKE_GRACE`.
-Режим конкуренции governor (`XRAY_XHTTP_FLOW_COMPETE`) экспериментальный и выключен.
-
-## 📈 Коротко о результатах
-
-| Проверка | Без функции | С функцией |
-|---|---|---|
-| 💓 Простой Hysteria | умирает к 45 с | живо на 330 с |
-| 🔁 Простой XHTTP + mux через CDN А | умирает к 90 с | живо на 330 с |
-| 🚦 p95 соседних запросов при скачивании, RTT 50 мс | 2411 мс | 309 мс |
-| 🚦 Скорость при конкурирующем TCP | 84,9 Мбит/с | **34,2 Мбит/с** (цена governor) |
-
-0.2.0-rc.3 на рабочей ноде: 0 рестартов, около 32% одного ядра при ~130 Мбит/с,
-governor срабатывает на XHTTP + REALITY. Сравнения A/B с прошлой версией нет.
-
-Замеры сделаны на небольших выборках и частично на более ранних сборках.
-Стенды и оговорки: **[TEST_RESULTS.md](TEST_RESULTS.md)** и [отчёты](reports/).
-
-## 🚀 Быстрый старт
-
-Нужны Python 3.11+, git и Go с автозагрузкой toolchain, для образа — Docker.
-
-```bash
-bash build.sh                # бинарник linux/amd64
-bash build.sh --full-checks  # плюс расширенные тесты governor
-bash build.sh image          # плюс локальный образ для Remnawave Node
+```yaml
+services:
+  remnanode:
+    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0   # instead of remnawave/node
 ```
 
-На Windows: `python build.py build`.
-Результат: `out/0.2.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`).
-Сценарии ничего не устанавливают и не публикуют.
+```bash
+docker compose pull && docker compose up -d
+```
 
-## ⚙️ Настройки
+The restart drops current connections. To roll back, put the old image back and recreate the service.
+Plain binaries (`linux/amd64`, `windows/amd64`) with `SHA256SUMS` are on the [releases page](https://github.com/BloodyBaronDev/infinity-xray/releases/latest).
 
-| Переменная | По умолчанию | Значение |
+## 📈 Results
+
+| Check | Without | With |
 |---|---|---|
-| `XRAY_IC_QUIC_KEEPALIVE` | `10` | Интервал QUIC keepalive, с; ≤0 отключает |
-| `XRAY_IC_MUX_KEEPALIVE` | `5` | Тишина перед mux keepalive, с; ≤0 отключает |
-| `XRAY_IC_STATS` | `60` | Интервал сводки icstats, с; ≤0 отключает сводку |
-| `XRAY_XHTTP_FLOW` | в Docker `on`, у бинарника выключен | Серверный governor |
-| `XRAY_XHTTP_FLOW_COMPETE` | выключено | Экспериментальный режим конкуренции governor |
-| `XRAY_IC_REVOKE_GRACE` | `0` | Отсрочка отзыва VLESS, с; больше паузы remove/add панели; 0 отключает |
-| `XRAY_IC_USER_MAX_CONNS` | `0` | Предел соединений VLESS на email, mux = одно; 0 отключает |
-| `XRAY_IC_USER_RATE_DOWN_MBPS` | `0` | Общий лимит скачивания на email, Мбит/с; 0 отключает |
-| `XRAY_IC_USER_RATE_UP_MBPS` | `0` | Общий лимит загрузки на email, Мбит/с; 0 отключает |
-| `XRAY_IC_METRICS_LISTEN` | не задано | Адрес `/metrics`, например `127.0.0.1:9550`; не публикуйте наружу |
-| `XRAY_IC_DRAIN_SECONDS` | `0` | Ожидание соединений при остановке, с; 0 отключает |
-| `XRAY_IC_START_TIMEOUT` | `60` | Предел запуска, с; ≤0 отключает |
+| 💓 Idle Hysteria connection | dies by 45 s | alive at 330 s |
+| 🔁 Idle XHTTP + mux via CDN | dies by 90 s | alive at 330 s |
+| 🚦 p95 of neighbour requests during a download, RTT 50 ms | 2411 ms | 309 ms |
+| 🚦 Throughput against competing TCP | 84.9 Mbit/s | **34.2 Mbit/s** (governor's cost) |
 
-Явный `xhttpSettings.extra.h2Flow.enabled` важнее `XRAY_XHTTP_FLOW`.
+0.2.0-rc.3 on a production node: 0 restarts, ~32% of one core at ~130 Mbit/s.
+Small samples, partly on earlier builds. Details and caveats: [TEST_RESULTS.md](TEST_RESULTS.md) (in Russian) and [reports](reports/).
 
-## 🐳 Установка на ноду
+## ✨ Features
 
-В сервисе Remnawave Node меняется только `image`, порты и секреты остаются прежними.
-Перезапуск оборвёт текущие соединения. Заранее сохраните compose и ID старого образа:
-для отката верните прежний образ и пересоздайте сервис.
+| | Feature | What it does | Limits |
+|---|---|---|---|
+| 💓 | **Hysteria keepalive** | Server sends QUIC keepalive during silence | Dead clients are still closed by QUIC timeouts |
+| 🔁 | **Mux keepalive** | Empty Mux.Cool frames keep a quiet downlink alive through CDNs | Needs mux on the client |
+| 🧩 | **Mux over XHTTP** | Server-side ban removed | Still banned for MASQUE |
+| 🚦 | **HTTP/2 governor** | Lower latency for parallel requests under load | More CPU, yields bandwidth to competing TCP |
+| 🛑 | **Bounded shutdown** | At most 7 s per Close, 1 s per error message | — |
+| 📊 | **icstats** | Hysteria and mux counters, no traffic content | Non-mux connections not measured |
+| 🔐 | **REALITY validation** | Bad keys and short IDs rejected before the listener starts | — |
+| 🧱 | **TCP-only Mux.Cool** | UDP to `v1.mux.cool` goes through normal routing | — |
+| ⏳ | **Delayed VLESS revoke** | Closes a removed user's connections if the key doesn't return | Off; VLESS only |
+| 🚧 | **Per-user limits** | VLESS connection cap and total rate per email | Off; one value for all; no Vision splice |
+| 📈 | **Prometheus metrics** | Aggregates only, no users or addresses | Off; no auth |
+| 🌙 | **Graceful drain** | Accepted connections finish before shutdown | Off; not for QUIC |
+| ⏱ | **Start watchdog** | A hung Start exits the process with code 1 | — |
 
-## 📌 База
+## ⚙️ Settings
 
-| Xray-core | Commit | Go | Build tags | Remnawave Node | Цели |
-|---|---|---|---|---|---|
-| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` | `linux/amd64`, `windows/amd64` для локальных проверок |
+| Variable | Default | Meaning |
+|---|---|---|
+| `XRAY_IC_QUIC_KEEPALIVE` | `10` | QUIC keepalive interval, s; ≤0 disables |
+| `XRAY_IC_MUX_KEEPALIVE` | `5` | Silence before mux keepalive, s; ≤0 disables |
+| `XRAY_IC_STATS` | `60` | icstats summary interval, s; ≤0 disables |
+| `XRAY_XHTTP_FLOW` | `on` in Docker, off for the binary | Server-side governor |
+| `XRAY_XHTTP_FLOW_COMPETE` | off | Experimental governor competition mode |
+| `XRAY_IC_REVOKE_GRACE` | `0` | VLESS revoke delay, s; must exceed the panel's remove/add pause |
+| `XRAY_IC_USER_MAX_CONNS` | `0` | VLESS connections per email, mux counts as one |
+| `XRAY_IC_USER_RATE_DOWN_MBPS` | `0` | Total download limit per email, Mbit/s |
+| `XRAY_IC_USER_RATE_UP_MBPS` | `0` | Total upload limit per email, Mbit/s |
+| `XRAY_IC_METRICS_LISTEN` | unset | `/metrics` address, e.g. `127.0.0.1:9550`; don't expose publicly |
+| `XRAY_IC_DRAIN_SECONDS` | `0` | Wait for connections on shutdown, s |
+| `XRAY_IC_START_TIMEOUT` | `60` | Start limit, s; ≤0 disables |
 
-Сборка сверяет commit базы и SHA256 патча из [`release.json`](release.json).
+An explicit `xhttpSettings.extra.h2Flow.enabled` overrides `XRAY_XHTTP_FLOW`.
 
-## 📚 Документация
+## 🛠 Build from source
 
-- 🧪 [Результаты проверок](TEST_RESULTS.md) и [отчёты](reports/)
-- 🛠 [Сборка, правка патча, проверки и выпуск](docs/DEVELOPMENT.md)
-- 📝 [История версий](CHANGELOG.md)
-- 🧾 [Происхождение кода](NOTICE.md)
+Requires Python 3.11+, git, Go with toolchain auto-download; Docker for the image.
 
-## 📄 Лицензия
+```bash
+bash build.sh                # linux/amd64 binary
+bash build.sh --full-checks  # plus extended governor tests
+bash build.sh image          # plus a local Remnawave Node image
+```
+
+On Windows: `python build.py build`. Output: `out/<version>/linux-amd64/`.
+The build checks the upstream commit and patch SHA256 from [`release.json`](release.json).
+
+| Xray-core | Commit | Go | Build tags | Remnawave Node |
+|---|---|---|---|---|
+| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` |
+
+## 📚 Docs
+
+[Test results](TEST_RESULTS.md) · [Reports](reports/) · [Development](docs/DEVELOPMENT.md) · [Changelog](CHANGELOG.md) · [Code origin](NOTICE.md) — in Russian.
+
+Found a bug or have a question? Open an [issue](https://github.com/BloodyBaronDev/infinity-xray/issues). If this build helps you, a ⭐ helps others find it.
+
+## 📄 License
 
 [Mozilla Public License 2.0](LICENSE)
