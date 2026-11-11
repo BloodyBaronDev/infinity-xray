@@ -1,0 +1,102 @@
+{
+  "release": "0.2.0-rc.2",
+  "patch_sha256": "bd242aeeae77f430129865b7ab14b3d6798e637b593cc51ff47c5c445fbfa3f1",
+  "go_all": "passed with geodata, CGO_ENABLED=0, http2legacy, vet off",
+  "splithttp_race": {
+    "isolated_tests": 206,
+    "passed": 206,
+    "heavy_test_retry": "passed with temporary additional 1 GiB swap, unchanged payload",
+    "single_process_suite": "initial OOM, not subsequently rerun",
+    "fuzz": "seed corpora under race passed"
+  },
+  "python_release_tests": 7,
+  "node_version": "3.4.4",
+  "node_image_digests": [
+    "remnawave/node@sha256:19ca38195f699f59c0e5978489a18173234aca4b1bd29bab495b16e9d6423f70"
+  ],
+  "node_scope": "Loopback data plane, real mTLS/JWT Node API and s6, two configured users; sentinel not connected",
+  "node_checks": [
+    {
+      "kind": "test_scope",
+      "time_utc": "2026-11-09T09:05:23Z",
+      "users": 2,
+      "sentinel_connected": false,
+      "last_user_node_bug": "Сохранён в предыдущем однопользовательском опыте; этот контроль изолирует Xray"
+    },
+    {
+      "kind": "initial_data_plane",
+      "time_utc": "2026-11-09T09:05:25Z",
+      "ok": true
+    },
+    {
+      "kind": "connection_limit",
+      "time_utc": "2026-11-09T09:05:25Z",
+      "held": 2,
+      "third_rejected": true
+    },
+    {
+      "kind": "rate_limit",
+      "time_utc": "2026-11-09T09:05:49Z",
+      "rep": 1,
+      "bytes": 25567179,
+      "elapsed": 10.000542402995052,
+      "mbit": 20.452633843014684,
+      "target_mbit": 20
+    },
+    {
+      "kind": "rate_limit",
+      "time_utc": "2026-11-09T09:05:59Z",
+      "rep": 2,
+      "bytes": 25624832,
+      "elapsed": 10.017275721002079,
+      "mbit": 20.46451168057626,
+      "target_mbit": 20
+    },
+    {
+      "kind": "rate_limit",
+      "time_utc": "2026-11-09T09:06:10Z",
+      "rep": 3,
+      "bytes": 25532480,
+      "elapsed": 10.010484182006621,
+      "mbit": 20.404591454941563,
+      "target_mbit": 20
+    },
+    {
+      "kind": "same_key_resync",
+      "time_utc": "2026-11-09T09:06:13Z",
+      "survived_grace": true,
+      "received_bytes": 7108808
+    },
+    {
+      "kind": "revoke",
+      "time_utc": "2026-11-09T09:06:16Z",
+      "closed_seconds": 3.015954669994244,
+      "last_data_after_action_seconds": 1.9971568869950715
+    },
+    {
+      "kind": "key_rotation",
+      "time_utc": "2026-11-09T09:06:17Z",
+      "closed_seconds": 1.023911734999274,
+      "last_data_after_action_seconds": 0.0003718209991347976
+    },
+    {
+      "kind": "metrics",
+      "time_utc": "2026-11-09T09:06:18Z",
+      "available": true,
+      "lines": 66
+    },
+    {
+      "kind": "drain",
+      "time_utc": "2026-11-09T09:06:22Z",
+      "closed_seconds": 4.025868500000797,
+      "last_data_after_action_seconds": 2.9944654069986427
+    },
+    {
+      "kind": "complete",
+      "time_utc": "2026-11-09T09:06:22Z",
+      "ok": true
+    }
+  ],
+  "known_node_issue": "One-user remove/add resync loses inbound tracking; subsequent remove API returns success without dispatching removal to Xray. Reproduced, not fixed in the image.",
+  "source_log_sha256": "34bdd990327a4a1b5638b53a99b7abdddefd35411e935e10213d5f7541a2cc43"
+}

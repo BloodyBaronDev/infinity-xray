@@ -1,5 +1,174 @@
+diff --git a/app/dispatcher/default.go b/app/dispatcher/default.go
+index cae9735..79acf3e 100644
+--- a/app/dispatcher/default.go
++++ b/app/dispatcher/default.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/icusers"
+ 	"github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/protocol"
+@@ -159,6 +160,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
+ 	}
+ 
+ 	if user != nil && len(user.Email) > 0 {
++		inboundLink.Writer = limitWriter(ctx, icusers.UplinkBucket(user.Email), inboundLink.Writer)
++		outboundLink.Writer = limitWriter(ctx, icusers.DownlinkBucket(user.Email), outboundLink.Writer)
+ 		p := d.policy.ForLevel(user.Level)
+ 		if p.Stats.UserUplink {
+ 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
+@@ -194,6 +197,10 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
+ 		user = sessionInbound.User
+ 	}
+ 
++	if user != nil && len(user.Email) > 0 {
++		link.Reader = limitReader(ctx, icusers.UplinkBucket(user.Email), link.Reader)
++		link.Writer = limitWriter(ctx, icusers.DownlinkBucket(user.Email), link.Writer)
++	}
+ 	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
+ 
+ 	if user != nil && len(user.Email) > 0 {
+diff --git a/app/dispatcher/ic_rate.go b/app/dispatcher/ic_rate.go
+new file mode 100644
+index 0000000..0a5b1b8
+--- /dev/null
++++ b/app/dispatcher/ic_rate.go
+@@ -0,0 +1,62 @@
++package dispatcher
++
++import (
++	"context"
++
++	"github.com/xtls/xray-core/common"
++	"github.com/xtls/xray-core/common/buf"
++	"github.com/xtls/xray-core/common/icusers"
++)
++
++// rateWriter charges what it writes to a user's shared bucket.
++type rateWriter struct {
++	ctx    context.Context
++	bucket *icusers.Bucket
++	writer buf.Writer
++}
++
++func (w *rateWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
++	if err := w.bucket.Wait(w.ctx, int(mb.Len())); err != nil {
++		buf.ReleaseMulti(mb)
++		return err
++	}
++	return w.writer.WriteMultiBuffer(mb)
++}
++
++func (w *rateWriter) Close() error { return common.Close(w.writer) }
++
++func (w *rateWriter) Interrupt() { common.Interrupt(w.writer) }
++
++// rateReader charges what it read before handing it on.
++type rateReader struct {
++	ctx    context.Context
++	bucket *icusers.Bucket
++	reader buf.Reader
++}
++
++func (r *rateReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
++	mb, err := r.reader.ReadMultiBuffer()
++	if !mb.IsEmpty() {
++		if waitErr := r.bucket.Wait(r.ctx, int(mb.Len())); waitErr != nil {
++			buf.ReleaseMulti(mb)
++			return nil, waitErr
++		}
++	}
++	return mb, err
++}
++
++func (r *rateReader) Interrupt() { common.Interrupt(r.reader) }
++
++func limitWriter(ctx context.Context, b *icusers.Bucket, w buf.Writer) buf.Writer {
++	if b == nil {
++		return w
++	}
++	return &rateWriter{ctx: ctx, bucket: b, writer: w}
++}
++
++func limitReader(ctx context.Context, b *icusers.Bucket, r buf.Reader) buf.Reader {
++	if b == nil {
++		return r
++	}
++	return &rateReader{ctx: ctx, bucket: b, reader: r}
++}
+diff --git a/app/dispatcher/ic_rate_test.go b/app/dispatcher/ic_rate_test.go
+new file mode 100644
+index 0000000..c3cd125
+--- /dev/null
++++ b/app/dispatcher/ic_rate_test.go
+@@ -0,0 +1,63 @@
++package dispatcher
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/buf"
++	"github.com/xtls/xray-core/common/icusers"
++)
++
++type sinkWriter struct{ n int32 }
++
++func (s *sinkWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
++	s.n += mb.Len()
++	buf.ReleaseMulti(mb)
++	return nil
++}
++
++func oneBuffer(size int32) buf.MultiBuffer {
++	b := buf.New()
++	b.Extend(size)
++	return buf.MultiBuffer{b}
++}
++
++func TestRateWriterPassesWithoutBucket(t *testing.T) {
++	sink := &sinkWriter{}
++	if limitWriter(context.Background(), nil, sink) != buf.Writer(sink) {
++		t.Fatal("unlimited user got a wrapper")
++	}
++}
++
++func TestRateWriterDelays(t *testing.T) {
++	sink := &sinkWriter{}
++	// 64 KiB burst at 64 KiB/s: the second second's data has to wait.
++	w := limitWriter(context.Background(), icusers.NewBucket(64*1024), sink)
++	start := time.Now()
++	for sent := 0; sent < 96*1024; sent += 2048 {
++		if err := w.WriteMultiBuffer(oneBuffer(2048)); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if d := time.Since(start); d < 300*time.Millisecond {
++		t.Fatalf("not limited: %v", d)
++	}
++	if sink.n != 96*1024 {
++		t.Fatalf("delivered %d", sink.n)
++	}
++}
++
++func TestRateWriterStopsWithContext(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	w := limitWriter(ctx, icusers.NewBucket(1), &sinkWriter{})
++	_ = w.WriteMultiBuffer(oneBuffer(2048)) // inside the minimum burst
++	var err error
++	for i := 0; i < 64 && err == nil; i++ {
++		err = w.WriteMultiBuffer(oneBuffer(2048))
++	}
++	if err == nil {
++		t.Fatal("blocked writer ignored its context")
++	}
++}
 diff --git a/app/proxyman/inbound/always.go b/app/proxyman/inbound/always.go
-index 70edbef..8120e3d 100644
+index 70edbef..bb5d3fb 100644
 --- a/app/proxyman/inbound/always.go
 +++ b/app/proxyman/inbound/always.go
 @@ -15,6 +15,7 @@ import (
@@ -22,11 +191,29 @@ index 70edbef..8120e3d 100644
  
  	newCtx := session.ContextWithInbound(ctx, &session.Inbound{Tag: tag, Source: src})
  	newCtx = session.ContextWithContent(newCtx, &session.Content{SniffingRequest: sniffingRequest})
+@@ -200,6 +206,17 @@ func (h *AlwaysOnInboundHandler) Close() error {
+ 	return nil
+ }
+ 
++// StopAccepting stops the handler's TCP-side listeners, see tcpWorker.
++func (h *AlwaysOnInboundHandler) StopAccepting() error {
++	var errs []error
++	for _, w := range h.workers {
++		if tw, ok := w.(*tcpWorker); ok {
++			errs = append(errs, tw.StopAccepting())
++		}
++	}
++	return errors.Combine(errs...)
++}
++
+ func (h *AlwaysOnInboundHandler) Tag() string {
+ 	return h.tag
+ }
 diff --git a/app/proxyman/inbound/inbound.go b/app/proxyman/inbound/inbound.go
-index c0ced47..1727744 100644
+index 62b2a7c..dcf2cd2 100644
 --- a/app/proxyman/inbound/inbound.go
 +++ b/app/proxyman/inbound/inbound.go
-@@ -174,7 +174,8 @@ func NewHandler(ctx context.Context, config *core.InboundHandlerConfig) (inbound
+@@ -184,7 +184,8 @@ func NewHandler(ctx context.Context, config *core.InboundHandlerConfig) (inbound
  			Mark: streamSettings.SocketSettings.Mark,
  		})
  	}
@@ -131,6 +318,70 @@ index 0000000..4634cde
 +	defer listener.Close()
 +	return net.Port(listener.Addr().(*stdnet.TCPAddr).Port)
 +}
+diff --git a/app/proxyman/inbound/worker.go b/app/proxyman/inbound/worker.go
+index 4a3bb6d..771f8ea 100644
+--- a/app/proxyman/inbound/worker.go
++++ b/app/proxyman/inbound/worker.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/xtls/xray-core/common/buf"
+ 	c "github.com/xtls/xray-core/common/ctx"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/icstats"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/serial"
+ 	"github.com/xtls/xray-core/common/session"
+@@ -35,6 +36,8 @@ type worker interface {
+ }
+ 
+ type tcpWorker struct {
++	hubOnce         sync.Once
++	hubErr          error
+ 	address         net.Address
+ 	port            net.Port
+ 	proxy           proxy.Inbound
+@@ -120,6 +123,8 @@ func (w *tcpWorker) callback(conn stat.Connection) {
+ 	content.SniffingRequest = w.sniffingRequest
+ 	ctx = session.ContextWithContent(ctx, content)
+ 
++	icstats.InboundConnsActive.Add(1)
++	defer icstats.InboundConnsActive.Add(-1)
+ 	if err := w.proxy.Process(ctx, net.Network_TCP, conn, w.dispatcher); err != nil {
+ 		errors.LogInfoInner(ctx, err, "connection ends")
+ 	}
+@@ -127,11 +132,24 @@ func (w *tcpWorker) callback(conn stat.Connection) {
+ 	conn.Close()
+ }
+ 
++// StopAccepting closes the listener and leaves accepted connections running.
++// Close later does not close it a second time.
++func (w *tcpWorker) StopAccepting() error {
++	w.hubOnce.Do(func() {
++		if w.hub != nil {
++			w.hubErr = common.Close(w.hub)
++		}
++	})
++	return w.hubErr
++}
++
+ func (w *tcpWorker) Proxy() proxy.Inbound {
+ 	return w.proxy
+ }
+ 
+ func (w *tcpWorker) Start() error {
++	w.hubOnce = sync.Once{}
++	w.hubErr = nil
+ 	ctx := context.Background()
+ 
+ 	if v, ok := w.proxy.(*hysteria_proxy.Server); ok {
+@@ -151,7 +169,7 @@ func (w *tcpWorker) Start() error {
+ func (w *tcpWorker) Close() error {
+ 	var errs []interface{}
+ 	if w.hub != nil {
+-		if err := common.Close(w.hub); err != nil {
++		if err := w.StopAccepting(); err != nil {
+ 			errs = append(errs, err)
+ 		}
+ 		if err := common.Close(w.proxy); err != nil {
 diff --git a/common/icstats/icstats.go b/common/icstats/icstats.go
 new file mode 100644
 index 0000000..822b6a1
@@ -216,6 +467,167 @@ index 0000000..822b6a1
 +		}
 +	}()
 +}
+diff --git a/common/icstats/metrics.go b/common/icstats/metrics.go
+new file mode 100644
+index 0000000..c4736ca
+--- /dev/null
++++ b/common/icstats/metrics.go
+@@ -0,0 +1,106 @@
++package icstats
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"os"
++	"sync/atomic"
++	"time"
++
++	"github.com/xtls/xray-core/common/errors"
++)
++
++var (
++	// Inbound and shutdown
++	InboundConnsActive atomic.Int64 // connections inside an inbound handler
++	Draining           atomic.Int64 // 1 from the stop signal on
++
++	// Per-user policy
++	UserConnsRejected   atomic.Int64
++	UserSessionsRevoked atomic.Int64
++	UserRateWaits       atomic.Int64
++
++	// HTTP/2 governor
++	H2FlowConnsActive atomic.Int64
++	H2FlowConnsTotal  atomic.Int64
++	H2FlowCompete     atomic.Int64 // rounds a window grew against a foreign queue
++)
++
++type metric struct {
++	name, kind, help string
++	value            func() float64
++}
++
++func counter(name, help string, v *atomic.Int64) metric {
++	return metric{name, "counter", help, func() float64 { return float64(v.Load()) }}
++}
++
++func gauge(name, help string, v *atomic.Int64) metric {
++	return metric{name, "gauge", help, func() float64 { return float64(v.Load()) }}
++}
++
++var metrics = []metric{
++	gauge("infinity_hysteria_conns_active", "Open Hysteria QUIC connections.", &HyConnsActive),
++	counter("infinity_hysteria_conns_total", "Accepted Hysteria QUIC connections.", &HyConnsTotal),
++	counter("infinity_hysteria_close_idle_total", "Hysteria connections closed by QUIC idle timeout.", &HyCloseIdle),
++	counter("infinity_hysteria_close_other_total", "Hysteria connections closed for other reasons.", &HyCloseOther),
++	gauge("infinity_mux_workers_active", "Live mux connections.", &MuxWorkersActive),
++	counter("infinity_mux_workers_total", "Created mux connections.", &MuxWorkersTotal),
++	counter("infinity_mux_sessions_total", "Sub-connections inside mux.", &MuxSessionsTotal),
++	counter("infinity_mux_keepalives_total", "Sent mux keepalive frames.", &MuxKeepAlives),
++	counter("infinity_mux_keepalive_errors_total", "Mux keepalive frames that failed to write.", &MuxKeepAliveErr),
++	gauge("infinity_mux_writes_active", "Mux writes not yet returned.", &MuxWritesActive),
++	counter("infinity_mux_writes_total", "Finished mux write attempts, including errors.", &MuxWritesTotal),
++	counter("infinity_mux_writes_slow_total", "Finished mux writes of at least a second.", &MuxWritesSlow),
++	counter("infinity_mux_write_errors_total", "Mux write errors.", &MuxWriteErrors),
++	{"infinity_mux_write_max_seconds", "gauge", "Longest finished mux write since start.", func() float64 {
++		return time.Duration(MuxWriteMaxNS.Load()).Seconds()
++	}},
++	gauge("infinity_inbound_conns_active", "Connections inside inbound handlers.", &InboundConnsActive),
++	gauge("infinity_draining", "1 once the process stopped accepting connections.", &Draining),
++	counter("infinity_user_conns_rejected_total", "Connections rejected by the per-user limit.", &UserConnsRejected),
++	counter("infinity_user_sessions_revoked_total", "Sessions closed because their user was removed.", &UserSessionsRevoked),
++	counter("infinity_user_rate_waits_total", "Transfers delayed by the per-user rate limit.", &UserRateWaits),
++	gauge("infinity_h2flow_conns_active", "Server connections under the HTTP/2 governor.", &H2FlowConnsActive),
++	counter("infinity_h2flow_conns_total", "Server connections accepted under the HTTP/2 governor.", &H2FlowConnsTotal),
++	counter("infinity_h2flow_compete_rounds_total", "Rounds a window grew against a foreign queue.", &H2FlowCompete),
++}
++
++// WriteMetrics writes the Prometheus text format. Only aggregates: no user,
++// address or traffic content ever reaches it.
++func WriteMetrics(w io.Writer) error {
++	for _, m := range metrics {
++		if _, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s %g\n", m.name, m.help, m.name, m.kind, m.name, m.value()); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++func metricsHandler() http.Handler {
++	mux := http.NewServeMux()
++	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
++		_ = WriteMetrics(w)
++	})
++	return mux
++}
++
++// StartMetrics serves /metrics on XRAY_IC_METRICS_LISTEN; unset leaves it off.
++// A bad address is logged and never stops the proxy.
++func StartMetrics() {
++	addr := os.Getenv("XRAY_IC_METRICS_LISTEN")
++	if addr == "" {
++		return
++	}
++	l, err := net.Listen("tcp", addr)
++	if err != nil {
++		errors.LogWarning(context.Background(), "[icstats] metrics not started: ", err)
++		return
++	}
++	srv := &http.Server{Handler: metricsHandler(), ReadHeaderTimeout: 5 * time.Second}
++	go func() { _ = srv.Serve(l) }()
++}
+diff --git a/common/icstats/metrics_test.go b/common/icstats/metrics_test.go
+new file mode 100644
+index 0000000..830f700
+--- /dev/null
++++ b/common/icstats/metrics_test.go
+@@ -0,0 +1,43 @@
++package icstats
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestMetricsFormat(t *testing.T) {
++	UserSessionsRevoked.Store(3)
++	defer UserSessionsRevoked.Store(0)
++	rec := httptest.NewRecorder()
++	metricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	body := rec.Body.String()
++	if rec.Code != 200 || !strings.Contains(rec.Header().Get("Content-Type"), "version=0.0.4") {
++		t.Fatalf("code %d type %q", rec.Code, rec.Header().Get("Content-Type"))
++	}
++	for _, want := range []string{
++		"# TYPE infinity_user_sessions_revoked_total counter\n",
++		"infinity_user_sessions_revoked_total 3\n",
++		"# TYPE infinity_mux_workers_active gauge\n",
++	} {
++		if !strings.Contains(body, want) {
++			t.Errorf("missing %q", want)
++		}
++	}
++	seen := map[string]bool{}
++	for _, m := range metrics {
++		if seen[m.name] {
++			t.Errorf("duplicate %s", m.name)
++		}
++		seen[m.name] = true
++	}
++}
++
++func TestMetricsOnlyOnItsPath(t *testing.T) {
++	rec := httptest.NewRecorder()
++	metricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
++	if rec.Code != http.StatusNotFound {
++		t.Fatalf("code %d", rec.Code)
++	}
++}
 diff --git a/common/icstats/mux_write_test.go b/common/icstats/mux_write_test.go
 new file mode 100644
 index 0000000..8587e8e
@@ -268,6 +680,417 @@ index 0000000..8587e8e
 +	group.Wait()
 +	if MuxWritesActive.Load() != 0 || MuxWritesTotal.Load() != 100 || MuxWritesSlow.Load() != 100 || MuxWriteMaxNS.Load() != int64(100*time.Second) {
 +		t.Fatal("параллельные записи потеряли счётчик или максимум")
++	}
++}
+diff --git a/common/icusers/icusers.go b/common/icusers/icusers.go
+new file mode 100644
+index 0000000..26379ba
+--- /dev/null
++++ b/common/icusers/icusers.go
+@@ -0,0 +1,265 @@
++// Package icusers holds per-user server policy of Infinity Xray: delayed
++// revocation of removed users, a connection limit and a shared rate limit.
++// Everything is off unless enabled through the environment at process start.
++package icusers
++
++import (
++	"context"
++	"sync"
++	"time"
++
++	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/icstats"
++	"github.com/xtls/xray-core/common/protocol"
++)
++
++var (
++	revokeGrace = time.Duration(icstats.EnvSeconds("XRAY_IC_REVOKE_GRACE", 0)) * time.Second
++	maxConns    = icstats.EnvSeconds("XRAY_IC_USER_MAX_CONNS", 0)
++)
++
++// ErrTooManyConns rejects a connection over XRAY_IC_USER_MAX_CONNS.
++var ErrTooManyConns = errors.New("user connection limit reached")
++
++// ErrRevoked rejects a connection authenticated just before its user's removal.
++var ErrRevoked = errors.New("user removed")
++
++// The limit spans inbounds: one person on two inbounds is still one user.
++var conns = struct {
++	sync.Mutex
++	n map[string]int
++}{n: make(map[string]int)}
++
++func acquireConn(email string, limit int) bool {
++	conns.Lock()
++	defer conns.Unlock()
++	if limit > 0 && conns.n[email] >= limit {
++		return false
++	}
++	conns.n[email]++
++	return true
++}
++
++func releaseConn(email string) {
++	conns.Lock()
++	defer conns.Unlock()
++	if conns.n[email]--; conns.n[email] <= 0 {
++		delete(conns.n, email)
++	}
++}
++
++type pendingRevoke struct {
++	timer   *time.Timer
++	account protocol.Account
++}
++
++// Tracker follows the live sessions of one inbound. Remnawave Node removes and
++// adds back unchanged users on every sync, so a removal only takes effect if
++// the same account has not returned within the grace period.
++type Tracker struct {
++	grace time.Duration
++	limit int
++
++	mu       sync.Mutex
++	nextID   uint64
++	sessions map[string]map[uint64]func()
++	pending  map[string]*pendingRevoke
++}
++
++// NewTracker returns a Tracker configured from the environment.
++func NewTracker() *Tracker {
++	return newTracker(revokeGrace, maxConns)
++}
++
++func newTracker(grace time.Duration, limit int) *Tracker {
++	return &Tracker{
++		grace:    grace,
++		limit:    limit,
++		sessions: make(map[string]map[uint64]func()),
++		pending:  make(map[string]*pendingRevoke),
++	}
++}
++
++// Acquire registers a session. closeFn must end it and may be called from any
++// goroutine. The returned release must be called exactly once.
++func (t *Tracker) Acquire(email string, closeFn func()) (release func(), err error) {
++	if email == "" || (t.grace <= 0 && t.limit <= 0) {
++		return func() {}, nil
++	}
++	if !acquireConn(email, t.limit) {
++		icstats.UserConnsRejected.Add(1)
++		return nil, ErrTooManyConns
++	}
++	t.mu.Lock()
++	t.nextID++
++	id := t.nextID
++	if t.sessions[email] == nil {
++		t.sessions[email] = make(map[uint64]func())
++	}
++	t.sessions[email][id] = closeFn
++	t.mu.Unlock()
++	return func() {
++		t.mu.Lock()
++		delete(t.sessions[email], id)
++		if len(t.sessions[email]) == 0 {
++			delete(t.sessions, email)
++		}
++		t.mu.Unlock()
++		releaseConn(email)
++	}, nil
++}
++
++// Removed starts the grace period of a user just removed from the inbound.
++func (t *Tracker) Removed(email string, account protocol.Account) {
++	if email == "" || t.grace <= 0 {
++		return
++	}
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	if old := t.pending[email]; old != nil {
++		old.timer.Stop()
++	}
++	p := &pendingRevoke{account: account}
++	p.timer = time.AfterFunc(t.grace, func() { t.expire(email, p) })
++	t.pending[email] = p
++}
++
++// Added ends the grace period. Sessions survive only if the account is the
++// same one: a user returning with a new key must not keep the old key's.
++func (t *Tracker) Added(email string, account protocol.Account) {
++	if email == "" || t.grace <= 0 {
++		return
++	}
++	t.mu.Lock()
++	p := t.pending[email]
++	if p == nil {
++		t.mu.Unlock()
++		return
++	}
++	p.timer.Stop()
++	delete(t.pending, email)
++	var closers []func()
++	if p.account == nil || account == nil || !p.account.Equals(account) {
++		closers = t.closersLocked(email)
++	}
++	t.mu.Unlock()
++	runClosers(closers)
++}
++
++func (t *Tracker) expire(email string, p *pendingRevoke) {
++	t.mu.Lock()
++	if t.pending[email] != p { // came back or replaced while the timer fired
++		t.mu.Unlock()
++		return
++	}
++	delete(t.pending, email)
++	closers := t.closersLocked(email)
++	t.mu.Unlock()
++	runClosers(closers)
++}
++
++func (t *Tracker) closersLocked(email string) []func() {
++	closers := make([]func(), 0, len(t.sessions[email]))
++	for _, c := range t.sessions[email] {
++		closers = append(closers, c)
++	}
++	return closers
++}
++
++func runClosers(closers []func()) {
++	for _, c := range closers {
++		c()
++	}
++	if len(closers) > 0 {
++		icstats.UserSessionsRevoked.Add(int64(len(closers)))
++	}
++}
++
++// Close cancels pending revocations; sessions end with the inbound's owner.
++func (t *Tracker) Close() {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	for email, p := range t.pending {
++		p.timer.Stop()
++		delete(t.pending, email)
++	}
++}
++
++// Enabled reports whether a removal can still reach a session being set up.
++func (t *Tracker) Enabled() bool {
++	return t.grace > 0
++}
++
++// Bucket is a token bucket that lets a transfer go into debt and then waits it
++// off, so buffers larger than the burst still pass.
++type Bucket struct {
++	mu     sync.Mutex
++	rate   float64
++	burst  float64
++	tokens float64
++	last   time.Time
++}
++
++// NewBucket allows bytesPerSecond with a quarter second of burst, at least 64 KiB.
++func NewBucket(bytesPerSecond float64) *Bucket {
++	burst := max(bytesPerSecond/4, 64*1024)
++	return &Bucket{rate: bytesPerSecond, burst: burst, tokens: burst, last: time.Now()}
++}
++
++// reserve takes n bytes and returns how long the caller owes.
++func (b *Bucket) reserve(now time.Time, n int) time.Duration {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	b.tokens = min(b.tokens+now.Sub(b.last).Seconds()*b.rate, b.burst) - float64(n)
++	b.last = now
++	if b.tokens >= 0 {
++		return 0
++	}
++	return time.Duration(-b.tokens / b.rate * float64(time.Second))
++}
++
++// Wait blocks until n bytes are allowed or ctx ends.
++func (b *Bucket) Wait(ctx context.Context, n int) error {
++	d := b.reserve(time.Now(), n)
++	if d <= 0 {
++		return nil
++	}
++	icstats.UserRateWaits.Add(1)
++	timer := time.NewTimer(d)
++	defer timer.Stop()
++	select {
++	case <-timer.C:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++
++var (
++	rateUp   = float64(icstats.EnvSeconds("XRAY_IC_USER_RATE_UP_MBPS", 0)) * 1e6 / 8
++	rateDown = float64(icstats.EnvSeconds("XRAY_IC_USER_RATE_DOWN_MBPS", 0)) * 1e6 / 8
++	buckets  sync.Map // "u"/"d" + email -> *Bucket
++)
++
++// RateLimited reports whether any user rate limit is on.
++func RateLimited() bool {
++	return rateUp > 0 || rateDown > 0
++}
++
++func bucketFor(prefix, email string, rate float64) *Bucket {
++	if rate <= 0 || email == "" {
++		return nil
++	}
++	key := prefix + email
++	if b, ok := buckets.Load(key); ok {
++		return b.(*Bucket)
++	}
++	b, _ := buckets.LoadOrStore(key, NewBucket(rate))
++	return b.(*Bucket)
++}
++
++// UplinkBucket is the user's shared upload bucket, nil when unlimited.
++func UplinkBucket(email string) *Bucket { return bucketFor("u", email, rateUp) }
++
++// DownlinkBucket is the user's shared download bucket, nil when unlimited.
++func DownlinkBucket(email string) *Bucket { return bucketFor("d", email, rateDown) }
+diff --git a/common/icusers/icusers_test.go b/common/icusers/icusers_test.go
+new file mode 100644
+index 0000000..d9f0dd3
+--- /dev/null
++++ b/common/icusers/icusers_test.go
+@@ -0,0 +1,134 @@
++package icusers
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/protocol"
++	"google.golang.org/protobuf/proto"
++)
++
++type testAccountStub string
++
++func (a testAccountStub) Equals(o protocol.Account) bool {
++	other, ok := o.(testAccountStub)
++	return ok && other == a
++}
++
++func (a testAccountStub) ToProto() proto.Message { return nil }
++
++func session(t *testing.T, tr *Tracker, email string) (*atomic.Int32, func()) {
++	t.Helper()
++	var closed atomic.Int32
++	release, err := tr.Acquire(email, func() { closed.Add(1) })
++	if err != nil {
++		t.Fatal(err)
++	}
++	return &closed, release
++}
++
++func TestResyncKeepsSessions(t *testing.T) {
++	tr := newTracker(30*time.Millisecond, 0)
++	closed, release := session(t, tr, "a")
++	defer release()
++	tr.Removed("a", testAccountStub("k1"))
++	tr.Added("a", testAccountStub("k1"))
++	time.Sleep(90 * time.Millisecond)
++	if closed.Load() != 0 {
++		t.Fatal("unchanged user lost its session")
++	}
++}
++
++func TestRemovalClosesAfterGrace(t *testing.T) {
++	tr := newTracker(20*time.Millisecond, 0)
++	closed, release := session(t, tr, "b")
++	defer release()
++	tr.Removed("b", testAccountStub("k1"))
++	if closed.Load() != 0 {
++		t.Fatal("closed before grace")
++	}
++	deadline := time.Now().Add(2 * time.Second)
++	for closed.Load() == 0 && time.Now().Before(deadline) {
++		time.Sleep(5 * time.Millisecond)
++	}
++	if closed.Load() != 1 {
++		t.Fatalf("closed %d times", closed.Load())
++	}
++}
++
++func TestNewKeyClosesAtOnce(t *testing.T) {
++	tr := newTracker(time.Hour, 0)
++	closed, release := session(t, tr, "c")
++	defer release()
++	tr.Removed("c", testAccountStub("old"))
++	tr.Added("c", testAccountStub("new"))
++	if closed.Load() != 1 {
++		t.Fatal("old key kept its session")
++	}
++}
++
++func TestGraceZeroNeverCloses(t *testing.T) {
++	tr := newTracker(0, 0)
++	var closed atomic.Int32
++	release, err := tr.Acquire("d", func() { closed.Add(1) })
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer release()
++	tr.Removed("d", nil)
++	if len(tr.pending) != 0 || closed.Load() != 0 {
++		t.Fatal("disabled tracker acted")
++	}
++}
++
++func TestConnLimitSpansTrackers(t *testing.T) {
++	a, b := newTracker(0, 2), newTracker(0, 2)
++	r1, err := a.Acquire("e", func() {})
++	if err != nil {
++		t.Fatal(err)
++	}
++	r2, err := b.Acquire("e", func() {})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := a.Acquire("e", func() {}); err != ErrTooManyConns {
++		t.Fatalf("got %v", err)
++	}
++	r1()
++	r3, err := a.Acquire("e", func() {})
++	if err != nil {
++		t.Fatal(err)
++	}
++	r2()
++	r3()
++	conns.Lock()
++	defer conns.Unlock()
++	if _, ok := conns.n["e"]; ok {
++		t.Fatal("count leaked")
++	}
++}
++
++func TestBucketPaces(t *testing.T) {
++	b := NewBucket(1 << 20)
++	start := time.Now()
++	b.tokens = 0
++	if d := b.reserve(start, 1<<19); d < 400*time.Millisecond || d > 600*time.Millisecond {
++		t.Fatalf("owed %v for half a second of data", d)
++	}
++	if d := b.reserve(start.Add(time.Second), 1); d <= 0 {
++		// the debt of half a second is repaid and half a second of refill remains
++		return
++	}
++	t.Fatal("debt not repaid")
++}
++
++func TestBucketWaitStopsWithContext(t *testing.T) {
++	b := NewBucket(1)
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if err := b.Wait(ctx, 1<<30); err == nil {
++		t.Fatal("wait ignored cancelled context")
 +	}
 +}
 diff --git a/common/mux/ic_write_test.go b/common/mux/ic_write_test.go
@@ -439,7 +1262,7 @@ index 0000000..7509e86
 +	}
 +}
 diff --git a/common/mux/server.go b/common/mux/server.go
-index c23a378..68e21a7 100644
+index 8dd48a1..e8515b4 100644
 --- a/common/mux/server.go
 +++ b/common/mux/server.go
 @@ -3,11 +3,13 @@ package mux
@@ -513,13 +1336,13 @@ index c23a378..68e21a7 100644
  func NewServerWorker(ctx context.Context, d routing.Dispatcher, link *transport.Link) (*ServerWorker, error) {
  	worker := &ServerWorker{
  		dispatcher:     d,
--		link:           link,
+-		link:           &transport.Link{Reader: link.Reader, Writer: &MutexWriter{Writer: link.Writer}},
  		sessionManager: NewSessionManager(),
  		done:           done.New(),
  		timer:          time.NewTicker(60 * time.Second),
  	}
 +	worker.lastWrite.Store(time.Now().UnixNano())
-+	worker.link = &transport.Link{Reader: link.Reader, Writer: &activityWriter{Writer: link.Writer, last: &worker.lastWrite}}
++	worker.link = &transport.Link{Reader: link.Reader, Writer: &activityWriter{Writer: &MutexWriter{Writer: link.Writer}, last: &worker.lastWrite}}
  	if inbound := session.InboundFromContext(ctx); inbound != nil {
  		inbound.CanSpliceCopy = 3
  	}
@@ -531,9 +1354,9 @@ index c23a378..68e21a7 100644
  	return worker, nil
  }
  
-+// keepAlive: IC-форк. Если клиенту ничего не писали дольше интервала, шлёт пустой кадр
-+// KeepAlive, чтобы CDN не закрыл тихий поток скачивания XHTTP. Стандартный клиент кадр
-+// отбрасывает. Интервал — XRAY_IC_MUX_KEEPALIVE, секунды (по умолчанию 5, 0 — выключить).
++// keepAlive: IC-форк. Если клиенту ничего не писали дольше интервала, шлёт пустой
++// KeepAlive, чтобы CDN не закрыл тихий поток скачивания XHTTP. Стандартный клиент его
++// отбрасывает. Интервал — XRAY_IC_MUX_KEEPALIVE, секунды (по умолчанию 5, 0 — выключено).
 +func (w *ServerWorker) keepAlive() {
 +	defer icstats.MuxWorkersActive.Add(-1)
 +	sec := icstats.EnvSeconds("XRAY_IC_MUX_KEEPALIVE", 5)
@@ -735,10 +1558,30 @@ index 826d074..2a38ed3 100644
  		if c.Mode == "stream-one" {
  			return nil, errors.New(`Can not use "downloadSettings" in "stream-one" mode.`)
 diff --git a/main/run.go b/main/run.go
-index 6ca9afb..6d687ff 100644
+index 6ca9afb..a451a28 100644
 --- a/main/run.go
 +++ b/main/run.go
-@@ -72,6 +72,10 @@ var (
+@@ -1,6 +1,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"log"
+ 	"os"
+@@ -16,9 +17,11 @@ import (
+ 
+ 	"github.com/xtls/xray-core/common/cmdarg"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/icstats"
+ 	clog "github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/platform"
+ 	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/features/inbound"
+ 	"github.com/xtls/xray-core/main/commands/base"
+ )
+ 
+@@ -72,6 +75,10 @@ var (
  	}()
  )
  
@@ -749,19 +1592,36 @@ index 6ca9afb..6d687ff 100644
  func executeRun(cmd *base.Command, args []string) {
  	if *dump {
  		clog.ReplaceWithSeverityLogger(clog.Severity_Warning)
-@@ -92,21 +96,41 @@ func executeRun(cmd *base.Command, args []string) {
+@@ -92,21 +99,93 @@ func executeRun(cmd *base.Command, args []string) {
  		os.Exit(0)
  	}
  
+-	if err := server.Start(); err != nil {
+-		fmt.Println("Failed to start:", err)
+-		os.Exit(-1)
 +	osSignals := make(chan os.Signal, 1)
 +	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
 +	defer signal.Stop(osSignals)
 +
- 	if err := server.Start(); err != nil {
- 		fmt.Println("Failed to start:", err)
- 		os.Exit(-1)
++	startDone := make(chan error, 1)
++	go func() { startDone <- server.Start() }()
++	var startDeadline <-chan time.Time
++	if t := time.Duration(icstats.EnvSeconds("XRAY_IC_START_TIMEOUT", 60)) * time.Second; t > 0 {
++		startDeadline = time.After(t)
++	}
++	select {
++	case err := <-startDone:
++		if err != nil {
++			fmt.Println("Failed to start:", err)
++			os.Exit(-1)
++		}
++	case <-startDeadline:
++		exitWithMessage("Timed out while starting Xray.")
++	case <-osSignals:
++		exitWithMessage("Stopped while starting Xray.")
  	}
 -	defer server.Close()
++	icstats.StartMetrics()
  
  	// Explicitly triggering GC to remove garbage from config loading.
  	runtime.GC()
@@ -772,6 +1632,7 @@ index 6ca9afb..6d687ff 100644
 -		signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
 -		<-osSignals
 +	<-osSignals
++	drain(server, osSignals)
 +	closeDone := make(chan error, 1)
 +	go func() { closeDone <- server.Close() }()
 +	select {
@@ -781,6 +1642,43 @@ index 6ca9afb..6d687ff 100644
 +		}
 +	case <-time.After(closeTimeout):
 +		exitWithMessage("Timed out while closing Xray.")
++	}
++}
++
++// drain stops accepting and waits for accepted connections to end, for at most
++// XRAY_IC_DRAIN_SECONDS. A second signal ends the wait. Off by default.
++func drain(server core.Server, osSignals <-chan os.Signal) {
++	seconds := icstats.EnvSeconds("XRAY_IC_DRAIN_SECONDS", 0)
++	if seconds <= 0 {
++		return
++	}
++	instance, ok := server.(*core.Instance)
++	if !ok {
++		return
++	}
++	manager, ok := instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
++	if !ok {
++		return
++	}
++	icstats.Draining.Store(1)
++	for _, h := range manager.ListHandlers(context.Background()) {
++		if s, ok := h.(interface{ StopAccepting() error }); ok {
++			if err := s.StopAccepting(); err != nil {
++				fmt.Println("Failed to stop accepting:", err)
++			}
++		}
++	}
++	deadline := time.After(time.Duration(seconds) * time.Second)
++	tick := time.NewTicker(100 * time.Millisecond)
++	defer tick.Stop()
++	for icstats.InboundConnsActive.Load() > 0 {
++		select {
++		case <-tick.C:
++		case <-deadline:
++			return
++		case <-osSignals:
++			return
++		}
 +	}
 +}
 +
@@ -1119,6 +2017,105 @@ index 0000000..99ed518
 +	defer c.mu.Unlock()
 +	return c.stdout.String()
 +}
+diff --git a/proxy/vless/inbound/inbound.go b/proxy/vless/inbound/inbound.go
+index 5692874..16151ba 100644
+--- a/proxy/vless/inbound/inbound.go
++++ b/proxy/vless/inbound/inbound.go
+@@ -15,6 +15,7 @@ import (
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/common/icusers"
+ 	"github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/mux"
+ 	"github.com/xtls/xray-core/common/net"
+@@ -81,6 +82,7 @@ type Handler struct {
+ 	observer               features.Feature
+ 	defaultDispatcher      routing.Dispatcher
+ 	ctx                    context.Context
++	sessions               *icusers.Tracker
+ 	fallbacks              map[string]map[string]map[string]*Fallback // or nil
+ 	// regexps               map[string]*regexp.Regexp       // or nil
+ }
+@@ -97,6 +99,7 @@ func New(ctx context.Context, config *Config, dc dns.Client, validator vless.Val
+ 		observer:               v.GetFeature(extension.ObservatoryType()),
+ 		defaultDispatcher:      v.GetFeature(routing.DispatcherType()).(routing.Dispatcher),
+ 		ctx:                    ctx,
++		sessions:               icusers.NewTracker(),
+ 	}
+ 
+ 	if config.Decryption != "" && config.Decryption != "none" {
+@@ -225,6 +228,7 @@ func (h *Handler) RemoveReverse(u *protocol.MemoryUser) {
+ 
+ // Close implements common.Closable.Close().
+ func (h *Handler) Close() error {
++	h.sessions.Close()
+ 	if h.decryption != nil {
+ 		h.decryption.Close()
+ 	}
+@@ -236,13 +240,24 @@ func (h *Handler) Close() error {
+ 
+ // AddUser implements proxy.UserManager.AddUser().
+ func (h *Handler) AddUser(ctx context.Context, u *protocol.MemoryUser) error {
+-	return h.validator.Add(u)
++	if err := h.validator.Add(u); err != nil {
++		return err
++	}
++	h.sessions.Added(u.Email, u.Account)
++	return nil
+ }
+ 
+ // RemoveUser implements proxy.UserManager.RemoveUser().
+ func (h *Handler) RemoveUser(ctx context.Context, e string) error {
+-	h.RemoveReverse(h.validator.GetByEmail(e))
+-	return h.validator.Del(e)
++	u := h.validator.GetByEmail(e)
++	h.RemoveReverse(u)
++	if err := h.validator.Del(e); err != nil {
++		return err
++	}
++	if u != nil {
++		h.sessions.Removed(u.Email, u.Account)
++	}
++	return nil
+ }
+ 
+ // GetUser implements proxy.UserManager.GetUser().
+@@ -533,6 +548,22 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
+ 	}
+ 	inbound.Name = "vless"
+ 	inbound.User = request.User
++
++	ctx, cancelSession := context.WithCancel(ctx)
++	defer cancelSession()
++	releaseSession, err := h.sessions.Acquire(request.User.Email, func() {
++		cancelSession()
++		connection.Close()
++	})
++	if err != nil {
++		return errors.New("rejected ", request.User.Email).Base(err)
++	}
++	defer releaseSession()
++	// A session that authenticated just before its user's removal registered
++	// after the removal looked for it.
++	if h.sessions.Enabled() && request.User.Email != "" && h.validator.GetByEmail(request.User.Email) == nil {
++		return errors.New("rejected ", request.User.Email).Base(icusers.ErrRevoked)
++	}
+ 	inbound.VlessRoute = net.PortFromBytes(userSentID[6:8])
+ 
+ 	account := request.User.Account.(*vless.MemoryAccount)
+@@ -600,6 +631,11 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
+ 		ctx = session.ContextWithAllowedNetwork(ctx, net.Network_UDP)
+ 	}
+ 
++	// Splice hands the socket to the kernel, past the rate limit in the dispatcher.
++	if icusers.RateLimited() {
++		inbound.CanSpliceCopy = 3
++	}
++
+ 	trafficState := proxy.NewTrafficState(userSentID)
+ 	clientReader := encoding.DecodeBodyAddons(reader, request, requestAddons)
+ 	if requestAddons.Flow == vless.XRV {
 diff --git a/transport/internet/hysteria/hub.go b/transport/internet/hysteria/hub.go
 index 441db87..0c4ee5d 100644
 --- a/transport/internet/hysteria/hub.go
@@ -1525,10 +2522,10 @@ index dac5f0f..99c3fa2 100644
  }
 diff --git a/transport/internet/splithttp/h2flow.go b/transport/internet/splithttp/h2flow.go
 new file mode 100644
-index 0000000..f9c1831
+index 0000000..0d6453f
 --- /dev/null
 +++ b/transport/internet/splithttp/h2flow.go
-@@ -0,0 +1,2372 @@
+@@ -0,0 +1,2450 @@
 +package splithttp
 +
 +import (
@@ -1538,15 +2535,24 @@ index 0000000..f9c1831
 +	"errors"
 +	"math/rand/v2"
 +	"net"
++	"os"
 +	"strings"
 +	"sync"
 +	"sync/atomic"
 +	"syscall"
 +	"time"
 +
++	"github.com/xtls/xray-core/common/icstats"
 +	"github.com/xtls/xray-core/common/platform"
 +	"golang.org/x/net/http2"
 +)
++
++// flowCompete makes windows contend with foreign traffic instead of holding
++// back for it: XRAY_XHTTP_FLOW_COMPETE=on. Only for the single downloading
++// connection from an address: several downloads of one client make a queue of
++// their own that each reads as foreign, and growing against it only lengthens
++// it. A connection that only carries requests beside the download makes none.
++var flowCompete = os.Getenv("XRAY_XHTTP_FLOW_COMPETE") == "on"
 +
 +// flowConn sits between a TLS/REALITY connection and the local HTTP/2 stack.
 +// It rewrites HTTP/2 flow control so that nothing buffers more than its reader
@@ -1751,6 +2757,14 @@ index 0000000..f9c1831
 +		return nil, err
 +	}
 +	fc := newFlowConn(c, l.up, l.down)
++	fc.counted = true
++	if flowCompete {
++		if host, _, err := net.SplitHostPort(c.RemoteAddr().String()); err == nil {
++			fc.peers = joinFlowGroup("peer:" + host)
++		}
++	}
++	icstats.H2FlowConnsTotal.Add(1)
++	icstats.H2FlowConnsActive.Add(1)
 +	fc.sendWindow, fc.noQueueCuts = l.sendWindow, l.noQueueCuts
 +	if l.connWindow > 0 {
 +		fc.upConnGrant, fc.upConnGrantKnown = int64(max(l.connWindow, h2InitWindow)-h2InitWindow), true
@@ -1948,6 +2962,10 @@ index 0000000..f9c1831
 +}
 +
 +type flowWindow struct {
++	// competing lets pi grow against a foreign queue, see flowCompete.
++	competing bool
++	// foreign is set while the queue is known not to be this window's.
++	foreign  bool
 +	cap      int32
 +	returned int64
 +	mark     time.Time
@@ -2101,6 +3119,14 @@ index 0000000..f9c1831
 +// the setpoint holds at the reader's rate, once per round trip, so the loop
 +// gain is the controller's own and the same gains fit any bandwidth and RTT.
 +const (
++	// flowCompeteBelow and flowCompeteGrow: under this gain a cap the reader
++	// fills grows by this share per round trip, however long the foreign queue.
++	flowCompeteBelow = 0.5
++	flowCompeteGrow  = 0.125
++	// flowCompeteForeign is the queue, in setpoints, that a cap near init
++	// cannot have made.
++	flowCompeteForeign = 4
++
 +	flowFullRounds = 3
 +	flowPIKi       = 0.3
 +	flowPIKp       = 0.2
@@ -2136,6 +3162,18 @@ index 0000000..f9c1831
 +	w.mark, w.markBase = now, w.returned
 +	w.rate = float64(copied) / round.Seconds()
 +	set := max(st.minRTT/4, 4*st.rttVar, flowPIMinSet)
++	// A queue far over the setpoint with the cap near init is not this
++	// window's: it took the cap there before the gain could judge a cut, and
++	// with no cut left to judge the gain would stand at one for good.
++	switch queue := st.rtt - st.minRTT; {
++	case !w.competing || queue <= set:
++		w.foreign = false
++	case float64(w.cap) <= 2*float64(init) && queue > flowCompeteForeign*set:
++		w.foreign = true
++	}
++	if w.foreign {
++		gain = 0
++	}
 +	e := min(max(float64(set-(st.rtt-st.minRTT))/float64(set), -2), 1)
 +	step := flowPIKi*e + flowPIKp*(e-w.piPrev)
 +	held := float64(copied) * float64(set) / float64(round)
@@ -2166,6 +3204,14 @@ index 0000000..f9c1831
 +		}
 +	}
 +	w.piRTT = st.rtt
++	// Against a queue the cuts do not move, the kernel's congestion control
++	// already answers for the path. Optional, see flowCompete.
++	if w.competing && gain < flowCompeteBelow && 4*float64(copied)*float64(st.rtt) >= 3*cap*float64(round) {
++		if grow := cap * flowCompeteGrow; delta < grow {
++			delta = grow
++			icstats.H2FlowCompete.Add(1)
++		}
++	}
 +	// The cap covers a round trip, the round the empty path's: beside a
 +	// queue a reader that takes all it is given still copies only the
 +	// round's share of the cap, and must not be taken for one that limits
@@ -2369,6 +3415,11 @@ index 0000000..f9c1831
 +	downShare float64
 +
 +	effect flowEffect
++	// counted: this server connection is in icstats.H2FlowConnsActive.
++	counted bool
++	// peers counts the server's connections from this address: siblings
++	// fill a queue that reads as foreign to each, see flowCompete.
++	peers *flowGroup
 +}
 +
 +// queueing tells how far the kernel RTT of this TCP connection has climbed
@@ -2781,6 +3832,15 @@ index 0000000..f9c1831
 +}
 +
 +func (c *flowConn) releaseLocked() {
++	if c.peers != nil {
++		c.peers.dropPeer(c)
++		c.peers.leave()
++		c.peers = nil
++	}
++	if c.counted {
++		c.counted = false
++		icstats.H2FlowConnsActive.Add(-1)
++	}
 +	if c.group != nil {
 +		c.group.leave()
 +		c.group = nil
@@ -3840,6 +4900,7 @@ index 0000000..f9c1831
 +	default:
 +		q = c.queueing(now)
 +	}
++	competing := flowCompete && !c.client && c.peers != nil && c.peers.downloadsAlone(c, now, c.downOpenReturned)
 +	switch {
 +	case c.client && c.modelled(now) && s.down.settled():
 +		gain := 1.0
@@ -3855,11 +4916,25 @@ index 0000000..f9c1831
 +		// A download the server has finished takes no part in the gain, see
 +		// cutGain, and neither does what is cut from it.
 +		gain := c.cutGain(now)
++		s.down.competing = competing
 +		if cut := s.down.pi(now, c.kstat, c.down.init, c.down.max, gain, c.downShare); !s.serverDone {
 +			c.effect.cutBy(cut)
 +		}
 +	default:
-+		s.down.adjust(now, c.currentRTT(), c.down.init, c.down.max, c.client || c.incremental, q > 0)
++		// A queue cuts have shown to be foreign holds no window of a lone
++		// connection back here either: until it counts as full it stays in this
++		// branch, its cap frozen by a queue it did not make, see flowCompete.
++		queued := q > 0
++		contend := queued && competing && (s.down.foreign || c.effect.value() < flowCompeteBelow)
++		if contend {
++			queued = false
++		}
++		mark := s.down.mark
++		s.down.adjust(now, c.currentRTT(), c.down.init, c.down.max, c.client || c.incremental, queued)
++		// Once per round, as in pi: this runs on every return of credit.
++		if contend && !s.down.mark.Equal(mark) {
++			icstats.H2FlowCompete.Add(1)
++		}
 +		// A round trip pi saw before the stream left it is no step to
 +		// follow when it comes back, and an error it saw then is no change
 +		// to step by: the stream comes back as a new one starts.
@@ -3873,7 +4948,7 @@ index 0000000..f9c1831
 +		if !c.floorConfirmed(now) {
 +			s.down.cap = min(s.down.cap, flowUnconfirmedDown)
 +		}
-+	case q == 2 && !c.noQueueCuts && now.Sub(s.down.qAt) >= c.currentRTT():
++	case q == 2 && !c.noQueueCuts && !(competing && s.down.foreign) && now.Sub(s.down.qAt) >= c.currentRTT():
 +		s.down.qAt = now
 +		before := s.down.cap
 +		// The quarter cut as it always was, before/4*3, scaled by the gain.
@@ -4671,6 +5746,164 @@ index 0000000..61563c1
 +		}
 +	}
 +	t.Logf("lowest cap seen: server %d, client %d", lowServer, lowClient)
++}
+diff --git a/transport/internet/splithttp/h2flow_compete_controller_test.go b/transport/internet/splithttp/h2flow_compete_controller_test.go
+new file mode 100644
+index 0000000..636081a
+--- /dev/null
++++ b/transport/internet/splithttp/h2flow_compete_controller_test.go
+@@ -0,0 +1,61 @@
++package splithttp
++
++import (
++	"testing"
++	"time"
++)
++
++// Проверяется весь цикл: PI и дополнительное ограничение длинной очереди.
++func TestFlowCompeteFullController(t *testing.T) {
++	for _, tc := range []struct {
++		name       string
++		enabled    bool
++		sibling    bool
++		start      int32
++		foreign    bool
++		wantGrowth bool
++	}{
++		{"foreign queue at floor", true, false, h2InitWindow, false, true},
++		{"own queue still shrinks", true, false, 1 << 20, false, false},
++		{"disabled still shrinks", false, false, 1 << 20, true, false},
++		{"sibling clears foreign state", true, true, 2 * h2InitWindow, true, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			old := flowCompete
++			flowCompete = tc.enabled
++			t.Cleanup(func() { flowCompete = old })
++			h, s := queuedDownload(t)
++			now := time.Unix(1000, 0)
++			h.c.mu.Lock()
++			defer h.c.mu.Unlock()
++			h.c.incremental = true
++			h.c.kstat = tcpStats{rtt: 600 * time.Millisecond, minRTT: 80 * time.Millisecond}
++			h.c.rttBase = h.c.kstat.minRTT
++			h.c.peers = joinFlowGroup("controller-test:" + t.Name())
++			h.c.peers.peers = map[*flowConn]*flowPeerRate{
++				h.c: {at: now, rate: 1 << 20, rated: now},
++			}
++			if tc.sibling {
++				h.c.peers.peers[&flowConn{}] = &flowPeerRate{at: now, rate: 1 << 20, rated: now}
++			}
++			s.down.cap, s.down.foreign = tc.start, tc.foreign
++			s.down.flat = flowFullRounds
++			s.down.mark, s.down.markBase = now.Add(-h.c.kstat.rtt), s.down.returned
++			s.down.returned += int64(tc.start)
++			h.c.governDown(now, s)
++			if tc.wantGrowth {
++				if !s.down.foreign || !s.down.competing {
++					t.Fatal("чужая очередь не распознана: неверные условия теста")
++				}
++				if s.down.cap <= tc.start {
++					t.Fatalf("после полного цикла окно %d не выросло от %d", s.down.cap, tc.start)
++				}
++			} else if s.down.cap >= tc.start {
++				t.Fatalf("защита собственной очереди не уменьшила окно %d: %d", tc.start, s.down.cap)
++			}
++			if tc.sibling && s.down.foreign {
++				t.Fatal("после появления второй загрузки остался признак чужой очереди")
++			}
++		})
++	}
++}
+diff --git a/transport/internet/splithttp/h2flow_compete_test.go b/transport/internet/splithttp/h2flow_compete_test.go
+new file mode 100644
+index 0000000..17ce23a
+--- /dev/null
++++ b/transport/internet/splithttp/h2flow_compete_test.go
+@@ -0,0 +1,85 @@
++package splithttp
++
++import (
++	"testing"
++	"time"
++)
++
++func TestFlowCompete(t *testing.T) {
++	const ms = time.Millisecond
++	// A long foreign queue that cuts do not move: gain is low.
++	queue := tcpStats{rtt: 200 * ms, minRTT: 100 * ms}
++	competing := false
++	round := func(gain float64, copied int64, st tcpStats) int32 {
++		w := flowWindow{cap: 1 << 20, mark: time.Unix(0, 0), competing: competing}
++		w.returned = copied
++		w.pi(w.mark.Add(st.rtt), st, h2InitWindow, 1<<30, gain, 0)
++		return w.cap
++	}
++
++	if c := round(0, 1<<20, queue); c > 1<<20 {
++		t.Fatalf("off: cap grew to %d", c)
++	}
++
++	competing = true
++	if c := round(0, 1<<20, queue); c < 1<<20+1<<17 {
++		t.Fatalf("on, foreign queue, full reader: cap %d", c)
++	}
++	// The queue is the server's own while cuts work: never override them.
++	if c := round(1, 1<<20, queue); c >= 1<<20 {
++		t.Fatalf("on, own queue: cap grew to %d", c)
++	}
++	// A reader that does not fill the cap has no use for more.
++	if c := round(0, 1<<16, queue); c >= 1<<20+1<<17 {
++		t.Fatalf("on, idle reader: cap grew to %d", c)
++	}
++}
++
++func TestFlowPeersDownloadsAlone(t *testing.T) {
++	g := joinFlowGroup("peer:test")
++	defer g.leave()
++	a, b := &flowConn{}, &flowConn{}
++	t0 := time.Unix(100, 0)
++	step := time.Second
++	if g.downloadsAlone(a, t0, 0) {
++		t.Fatal("a rate not known yet counts as alone")
++	}
++	if !g.downloadsAlone(a, t0.Add(step), 8<<20) {
++		t.Fatal("one download is alone")
++	}
++	g.downloadsAlone(b, t0, 0)
++	g.downloadsAlone(b, t0.Add(step), 1<<10)
++	if !g.downloadsAlone(a, t0.Add(step), 8<<20) {
++		t.Fatal("a request beside a download took the download for a sibling")
++	}
++	g.downloadsAlone(b, t0.Add(2*step), 8<<20)
++	if g.downloadsAlone(a, t0.Add(2*step), 16<<20) {
++		t.Fatal("two downloads from an address are not alone")
++	}
++	if !g.downloadsAlone(a, t0.Add(2*step+flowPeerFresh+time.Second), 48<<20) {
++		t.Fatal("a sibling that went quiet still counts")
++	}
++	g.downloadsAlone(b, t0.Add(10*step), 16<<20)
++	g.dropPeer(b)
++	if !g.downloadsAlone(a, t0.Add(10*step), 80<<20) {
++		t.Fatal("a closed sibling still counts")
++	}
++}
++
++// A cap the queue took to init before the gain fell has no cut left to judge.
++func TestFlowCompeteGrowsFromInit(t *testing.T) {
++	const ms = time.Millisecond
++	st := tcpStats{rtt: 600 * ms, minRTT: 40 * ms}
++	round := func(competing bool) int32 {
++		w := flowWindow{cap: h2InitWindow, mark: time.Unix(0, 0), competing: competing}
++		w.returned = h2InitWindow
++		w.pi(w.mark.Add(st.rtt), st, h2InitWindow, 1<<30, 1, 0)
++		return w.cap
++	}
++	if c := round(false); c != h2InitWindow {
++		t.Fatalf("off: cap %d", c)
++	}
++	if c := round(true); c <= h2InitWindow {
++		t.Fatalf("on: cap %d stayed at init", c)
++	}
 +}
 diff --git a/transport/internet/splithttp/h2flow_config_test.go b/transport/internet/splithttp/h2flow_config_test.go
 new file mode 100644
@@ -6696,10 +7929,10 @@ index 0000000..8b4a69e
 +}
 diff --git a/transport/internet/splithttp/h2flow_group.go b/transport/internet/splithttp/h2flow_group.go
 new file mode 100644
-index 0000000..642750a
+index 0000000..153639e
 --- /dev/null
 +++ b/transport/internet/splithttp/h2flow_group.go
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,198 @@
 +package splithttp
 +
 +import (
@@ -6770,6 +8003,9 @@ index 0000000..642750a
 +	cur, peak float64
 +	rAt       time.Time
 +	rMark     int64
++	// peers holds download rates where the group counts an address's
++	// connections, see flowCompete.
++	peers map[*flowConn]*flowPeerRate
 +}
 +
 +var flowGroups = struct {
@@ -6795,6 +8031,61 @@ index 0000000..642750a
 +	if g.refs--; g.refs <= 0 {
 +		delete(flowGroups.m, g.key)
 +	}
++}
++
++const (
++	// flowPeerSpan is the least time a connection's download rate is taken
++	// over, and flowPeerFresh how long that rate counts without a new note: a
++	// connection that returns no credit carries nothing.
++	flowPeerSpan  = 500 * time.Millisecond
++	flowPeerFresh = 3 * time.Second
++	// flowPeerShare is the part of a connection's rate a sibling must carry to
++	// count as a download of the same client. A share and not a rate, so that
++	// it fits any link: a request beside a download stays well under it.
++	flowPeerShare = 0.125
++)
++
++type flowPeerRate struct {
++	at    time.Time
++	mark  int64
++	rate  float64
++	rated time.Time
++}
++
++// downloadsAlone notes the bytes c has carried so far and reports whether c
++// is the only connection of the group that is downloading. A connection whose
++// rate is not known yet is not.
++func (g *flowGroup) downloadsAlone(c *flowConn, now time.Time, carried int64) bool {
++	g.mu.Lock()
++	defer g.mu.Unlock()
++	if g.peers == nil {
++		g.peers = map[*flowConn]*flowPeerRate{}
++	}
++	p := g.peers[c]
++	if p == nil {
++		p = &flowPeerRate{at: now, mark: carried}
++		g.peers[c] = p
++	}
++	if d := now.Sub(p.at); d >= flowPeerSpan {
++		p.rate = float64(carried-p.mark) / d.Seconds()
++		p.at, p.mark, p.rated = now, carried, now
++	}
++	if p.rate <= 0 || now.Sub(p.rated) > flowPeerFresh {
++		return false
++	}
++	for o, r := range g.peers {
++		if o != c && now.Sub(r.rated) <= flowPeerFresh && r.rate >= flowPeerShare*p.rate {
++			return false
++		}
++	}
++	return true
++}
++
++// dropPeer forgets a connection that closed.
++func (g *flowGroup) dropPeer(c *flowConn) {
++	g.mu.Lock()
++	defer g.mu.Unlock()
++	delete(g.peers, c)
 +}
 +
 +// request starts a probe unless one runs or one ended lately. rtt is the
@@ -15733,3 +17024,524 @@ index 5ec3173..c50558d 100644
  		go func() {
  			if err := l.server.Serve(l.listener); err != nil {
  				errors.LogErrorInner(ctx, err, "failed to serve HTTP for XHTTP")
+diff --git a/transport/internet/splithttp/splithttp_test.go b/transport/internet/splithttp/splithttp_test.go
+index 434108f..9f9a651 100644
+--- a/transport/internet/splithttp/splithttp_test.go
++++ b/transport/internet/splithttp/splithttp_test.go
+@@ -248,7 +248,7 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 		},
+ 	}
+ 
+-	serverClosed := false
++	serverClosed := make(chan struct{}, 1)
+ 	listen, err := ListenXH(context.Background(), net.LocalHostIP, listenPort, streamSettings, func(conn stat.Connection) {
+ 		go func() {
+ 			defer conn.Close()
+@@ -264,7 +264,10 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 				common.Must2(conn.Write(b.Bytes()))
+ 			}
+ 
+-			serverClosed = true
++			select {
++			case serverClosed <- struct{}{}:
++			default:
++			}
+ 		}()
+ 	})
+ 	common.Must(err)
+@@ -297,8 +300,9 @@ func Test_ListenXHAndDial_QUIC(t *testing.T) {
+ 	}
+ 
+ 	conn.Close()
+-	time.Sleep(100 * time.Millisecond)
+-	if !serverClosed {
++	select {
++	case <-serverClosed:
++	case <-time.After(time.Second):
+ 		t.Error("server did not get closed")
+ 	}
+ 
+diff --git a/transport/internet/tls/certificate_store.go b/transport/internet/tls/certificate_store.go
+new file mode 100644
+index 0000000..797253c
+--- /dev/null
++++ b/transport/internet/tls/certificate_store.go
+@@ -0,0 +1,91 @@
++package tls
++
++import (
++	"bytes"
++	"crypto/tls"
++	"crypto/x509"
++	"fmt"
++	"sync"
++	"sync/atomic"
++
++	"github.com/xtls/xray-core/common/platform/filesystem"
++	"google.golang.org/protobuf/proto"
++)
++
++// Опубликованный снимок не меняется: handshake может держать его после reload.
++type certificateSource struct {
++	current atomic.Pointer[Certificate]
++	stop    chan struct{}
++	once    sync.Once
++}
++
++func newCertificateSource(entry *Certificate) *certificateSource {
++	source := &certificateSource{stop: make(chan struct{})}
++	source.current.Store(proto.Clone(entry).(*Certificate))
++	return source
++}
++
++func (s *certificateSource) load() *Certificate { return s.current.Load() }
++
++func (s *certificateSource) close() { s.once.Do(func() { close(s.stop) }) }
++
++func (s *certificateSource) reload() (bool, error) {
++	previous := s.load()
++	if previous.CertificatePath == "" || previous.KeyPath == "" {
++		return false, nil
++	}
++	certificate, err := filesystem.ReadCert(previous.CertificatePath)
++	if err != nil {
++		return false, err
++	}
++	key, err := filesystem.ReadCert(previous.KeyPath)
++	if err != nil {
++		return false, err
++	}
++	if bytes.Equal(certificate, previous.Certificate) && bytes.Equal(key, previous.Key) {
++		return false, nil
++	}
++	// Во время замены двух файлов может временно появиться несовпадающая пара.
++	if _, err := tls.X509KeyPair(certificate, key); err != nil {
++		return false, fmt.Errorf("invalid reloaded certificate pair: %w", err)
++	}
++	next := proto.Clone(previous).(*Certificate)
++	next.Certificate, next.Key = certificate, key
++	s.current.Store(next)
++	return true, nil
++}
++
++type certificateStore struct {
++	entries []*atomic.Pointer[tls.Certificate]
++	sources []*certificateSource
++}
++
++func (s *certificateStore) add(certificate *tls.Certificate, source *certificateSource) *atomic.Pointer[tls.Certificate] {
++	entry := new(atomic.Pointer[tls.Certificate])
++	entry.Store(certificate)
++	s.entries = append(s.entries, entry)
++	s.sources = append(s.sources, source)
++	return entry
++}
++
++func (s *certificateStore) snapshot() []*tls.Certificate {
++	certificates := make([]*tls.Certificate, len(s.entries))
++	for index, entry := range s.entries {
++		certificates[index] = entry.Load()
++	}
++	return certificates
++}
++
++func (s *certificateStore) close() {
++	for _, source := range s.sources {
++		source.close()
++	}
++}
++
++func clonePublishedCertificate(certificate *tls.Certificate) *tls.Certificate {
++	copy := *certificate
++	if copy.Leaf == nil && len(copy.Certificate) > 0 {
++		copy.Leaf, _ = x509.ParseCertificate(copy.Certificate[0])
++	}
++	return &copy
++}
+diff --git a/transport/internet/tls/certificate_store_test.go b/transport/internet/tls/certificate_store_test.go
+new file mode 100644
+index 0000000..b5cd501
+--- /dev/null
++++ b/transport/internet/tls/certificate_store_test.go
+@@ -0,0 +1,154 @@
++package tls
++
++import (
++	"bytes"
++	gotls "crypto/tls"
++	"crypto/x509"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/protocol/tls/cert"
++	"google.golang.org/protobuf/proto"
++)
++
++func snapshotTestCertificate(t *testing.T, name string) *Certificate {
++	t.Helper()
++	generated, _ := cert.MustGenerate(nil, cert.CommonName(name), cert.DNSNames(name))
++	entry := ParseCertificate(generated)
++	entry.OneTimeLoading = true
++	return entry
++}
++
++func writeSnapshotPair(t *testing.T, entry *Certificate, certificate, key string) {
++	t.Helper()
++	if err := os.WriteFile(certificate, entry.Certificate, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(key, entry.Key, 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestCertificateSourceKeepsLastValidPair(t *testing.T) {
++	first := snapshotTestCertificate(t, "first.test")
++	second := snapshotTestCertificate(t, "second.test")
++	directory := t.TempDir()
++	first.CertificatePath, first.KeyPath = filepath.Join(directory, "cert.pem"), filepath.Join(directory, "key.pem")
++	writeSnapshotPair(t, first, first.CertificatePath, first.KeyPath)
++	original := proto.Clone(first)
++	source := newCertificateSource(first)
++	defer source.close()
++	if err := os.WriteFile(first.CertificatePath, second.Certificate, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err == nil || changed {
++		t.Fatalf("несовпадающая пара опубликована: changed=%v err=%v", changed, err)
++	}
++	if !bytes.Equal(source.load().Certificate, first.Certificate) {
++		t.Fatal("последний рабочий сертификат потерян")
++	}
++	if err := os.WriteFile(first.KeyPath, second.Key, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err != nil || !changed {
++		t.Fatalf("новая корректная пара не загружена: changed=%v err=%v", changed, err)
++	}
++	if !bytes.Equal(source.load().Certificate, second.Certificate) || !proto.Equal(first, original) {
++		t.Fatal("обновление потеряно или изменило исходный proto-конфиг")
++	}
++	if err := os.Remove(first.CertificatePath); err != nil {
++		t.Fatal(err)
++	}
++	if changed, err := source.reload(); err == nil || changed {
++		t.Fatal("исчезнувший файл заменил рабочий снимок")
++	}
++	if !bytes.Equal(source.load().Certificate, second.Certificate) {
++		t.Fatal("ошибка чтения сбросила рабочий снимок")
++	}
++}
++
++func TestCertificateStoreHotReloadConcurrentSelection(t *testing.T) {
++	first := snapshotTestCertificate(t, "first.test")
++	second := snapshotTestCertificate(t, "second.test")
++	directory := t.TempDir()
++	first.CertificatePath, first.KeyPath = filepath.Join(directory, "cert.pem"), filepath.Join(directory, "key.pem")
++	first.OneTimeLoading, first.OcspStapling = false, 1
++	writeSnapshotPair(t, first, first.CertificatePath, first.KeyPath)
++	original := proto.Clone(first)
++	store := (&Config{Certificate: []*Certificate{first}}).buildCertificateStore()
++	defer store.close()
++	selectCertificate := getNewGetCertificateFunc(store, false)
++	old, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "first.test"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	stop := make(chan struct{})
++	var workers sync.WaitGroup
++	for range 8 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for {
++				select {
++				case <-stop:
++					return
++				default:
++				}
++				certificate, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "first.test"})
++				if err != nil || certificate.Leaf == nil || len(certificate.Certificate) == 0 {
++					t.Error("выбор сертификата потерял целостный снимок")
++					return
++				}
++			}
++		}()
++	}
++	defer func() { close(stop); workers.Wait() }()
++	writeSnapshotPair(t, second, first.CertificatePath, first.KeyPath)
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		current, err := selectCertificate(&gotls.ClientHelloInfo{ServerName: "second.test"})
++		if err == nil && current.Leaf.Subject.CommonName == "second.test" {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("watcher не опубликовал новый сертификат")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if old.Leaf.Subject.CommonName != "first.test" || !proto.Equal(first, original) {
++		t.Fatal("reload изменил опубликованный сертификат или исходный конфиг")
++	}
++}
++
++func TestCertificateIssuingKeepsTLSConfigImmutable(t *testing.T) {
++	generated, _ := cert.MustGenerate(nil, cert.Authority(true), cert.KeyUsage(x509.KeyUsageCertSign))
++	entry := ParseCertificate(generated)
++	entry.Usage, entry.OneTimeLoading = Certificate_AUTHORITY_ISSUE, true
++	tlsConfig := (&Config{Certificate: []*Certificate{entry}}).GetTLSConfig()
++	var workers sync.WaitGroup
++	for worker := range 8 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			for request := range 12 {
++				certificate, err := tlsConfig.GetCertificate(&gotls.ClientHelloInfo{
++					ServerName: fmt.Sprintf("%d-%d.test", worker, request),
++				})
++				if err != nil || certificate.Leaf == nil {
++					t.Errorf("выдача сертификата: %v", err)
++					return
++				}
++				// crypto/tls читает эти поля параллельно с callback.
++				if len(tlsConfig.Certificates) != 0 || len(tlsConfig.NameToCertificate) != 0 {
++					t.Error("callback изменил общий tls.Config")
++					return
++				}
++			}
++		}()
++	}
++	workers.Wait()
++}
+diff --git a/transport/internet/tls/config.go b/transport/internet/tls/config.go
+index 71bd6ce..e028260 100644
+--- a/transport/internet/tls/config.go
++++ b/transport/internet/tls/config.go
+@@ -16,7 +16,6 @@ import (
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/ocsp"
+-	"github.com/xtls/xray-core/common/platform/filesystem"
+ 	"github.com/xtls/xray-core/common/protocol/tls/cert"
+ 	"github.com/xtls/xray-core/transport/internet"
+ 	"golang.org/x/crypto/x509roots/fallback/bundle"
+@@ -46,15 +45,23 @@ func (c *Config) loadSelfCertPool() (*x509.CertPool, error) {
+ 	return root, nil
+ }
+ 
+-// BuildCertificates builds a list of TLS certificates from proto definition.
++// BuildCertificates возвращает неизменяемый снимок. Живое обновление использует GetTLSConfig.
+ func (c *Config) BuildCertificates() []*tls.Certificate {
+-	certs := make([]*tls.Certificate, 0, len(c.Certificate))
++	store := c.buildCertificateStore()
++	defer store.close()
++	return store.snapshot()
++}
++
++func (c *Config) buildCertificateStore() *certificateStore {
++	store := new(certificateStore)
+ 	for _, entry := range c.Certificate {
+-		if entry.Usage != Certificate_ENCIPHERMENT {
++		if entry == nil || entry.Usage != Certificate_ENCIPHERMENT {
+ 			continue
+ 		}
++		source := newCertificateSource(entry)
+ 		getX509KeyPair := func() *tls.Certificate {
+-			keyPair, err := tls.X509KeyPair(entry.Certificate, entry.Key)
++			current := source.load()
++			keyPair, err := tls.X509KeyPair(current.Certificate, current.Key)
+ 			if err != nil {
+ 				errors.LogWarningInner(context.Background(), err, "ignoring invalid X509 key pair")
+ 				return nil
+@@ -66,14 +73,14 @@ func (c *Config) BuildCertificates() []*tls.Certificate {
+ 			}
+ 			return &keyPair
+ 		}
+-		if keyPair := getX509KeyPair(); keyPair != nil {
+-			certs = append(certs, keyPair)
+-		} else {
++		keyPair := getX509KeyPair()
++		if keyPair == nil {
++			source.close()
+ 			continue
+ 		}
+-		index := len(certs) - 1
+-		setupOcspTicker(entry, func(isReloaded, isOcspstapling bool) {
+-			cert := certs[index]
++		slot := store.add(keyPair, source)
++		setupOcspTicker(source, func(isReloaded, isOcspstapling bool) {
++			cert := slot.Load()
+ 			if isReloaded {
+ 				if newKeyPair := getX509KeyPair(); newKeyPair != nil {
+ 					cert = newKeyPair
+@@ -85,20 +92,23 @@ func (c *Config) BuildCertificates() []*tls.Certificate {
+ 				if newOCSPData, err := ocsp.GetOCSPForCert(cert.Certificate); err != nil {
+ 					errors.LogWarningInner(context.Background(), err, "ignoring invalid OCSP")
+ 				} else if string(newOCSPData) != string(cert.OCSPStaple) {
+-					cert.OCSPStaple = newOCSPData
++					next := clonePublishedCertificate(cert)
++					next.OCSPStaple = bytes.Clone(newOCSPData)
++					cert = next
+ 				}
+ 			}
+-			certs[index] = cert
++			slot.Store(cert)
+ 		})
+ 	}
+-	return certs
++	return store
+ }
+ 
+-func setupOcspTicker(entry *Certificate, callback func(isReloaded, isOcspstapling bool)) {
++func setupOcspTicker(source *certificateSource, callback func(isReloaded, isOcspstapling bool)) {
++	entry := source.load()
++	if entry.OneTimeLoading || (entry.OcspStapling == 0 && (entry.CertificatePath == "" || entry.KeyPath == "")) {
++		return
++	}
+ 	go func() {
+-		if entry.OneTimeLoading {
+-			return
+-		}
+ 		var isOcspstapling bool
+ 		hotReloadCertInterval := uint64(3600)
+ 		if entry.OcspStapling != 0 {
+@@ -106,27 +116,25 @@ func setupOcspTicker(entry *Certificate, callback func(isReloaded, isOcspstaplin
+ 			isOcspstapling = true
+ 		}
+ 		t := time.NewTicker(time.Duration(hotReloadCertInterval) * time.Second)
++		defer t.Stop()
+ 		for {
+-			var isReloaded bool
+-			if entry.CertificatePath != "" && entry.KeyPath != "" {
+-				newCert, err := filesystem.ReadCert(entry.CertificatePath)
+-				if err != nil {
+-					errors.LogErrorInner(context.Background(), err, "failed to parse certificate")
+-					return
+-				}
+-				newKey, err := filesystem.ReadCert(entry.KeyPath)
+-				if err != nil {
+-					errors.LogErrorInner(context.Background(), err, "failed to parse key")
+-					return
+-				}
+-				if string(newCert) != string(entry.Certificate) || string(newKey) != string(entry.Key) {
+-					entry.Certificate = newCert
+-					entry.Key = newKey
+-					isReloaded = true
+-				}
++			select {
++			case <-source.stop:
++				return
++			default:
++			}
++			isReloaded, err := source.reload()
++			if err != nil {
++				errors.LogWarningInner(context.Background(), err, "keeping previous TLS certificate")
++			}
++			if isReloaded || isOcspstapling {
++				callback(isReloaded, isOcspstapling)
++			}
++			select {
++			case <-t.C:
++			case <-source.stop:
++				return
+ 			}
+-			callback(isReloaded, isOcspstapling)
+-			<-t.C
+ 		}
+ 	}()
+ }
+@@ -159,18 +167,30 @@ func issueCertificate(rawCA *Certificate, domain string) (*tls.Certificate, erro
+ 	return &cert, err
+ }
+ 
+-func (c *Config) getCustomCA() []*Certificate {
+-	certs := make([]*Certificate, 0, len(c.Certificate))
++func (c *Config) getCustomCA() []*certificateSource {
++	certs := make([]*certificateSource, 0, len(c.Certificate))
+ 	for _, certificate := range c.Certificate {
+-		if certificate.Usage == Certificate_AUTHORITY_ISSUE {
+-			certs = append(certs, certificate)
+-			setupOcspTicker(certificate, func(isReloaded, isOcspstapling bool) {})
++		if certificate != nil && certificate.Usage == Certificate_AUTHORITY_ISSUE {
++			source := newCertificateSource(certificate)
++			certs = append(certs, source)
++			setupOcspTicker(source, func(isReloaded, isOcspstapling bool) {})
+ 		}
+ 	}
+ 	return certs
+ }
+ 
+-func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++func getGetCertificateFunc(c *tls.Config, ca []*certificateSource) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++	// Кэш выдачи приватный: crypto/tls параллельно читает исходный Config.
++	names := c.NameToCertificate
++	c = c.Clone()
++	c.Certificates = slices.Clone(c.Certificates)
++	for index := range c.Certificates {
++		c.Certificates[index] = *clonePublishedCertificate(&c.Certificates[index])
++	}
++	c.NameToCertificate = make(map[string]*tls.Certificate, len(names))
++	for name, certificate := range names {
++		c.NameToCertificate[name] = clonePublishedCertificate(certificate)
++	}
+ 	var access sync.RWMutex
+ 
+ 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+@@ -178,6 +198,11 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		certExpired := false
+ 
+ 		access.RLock()
++		if domain == "" && len(c.Certificates) > 0 {
++			certificate := &c.Certificates[0]
++			access.RUnlock()
++			return certificate, nil
++		}
+ 		certificate, found := c.NameToCertificate[domain]
+ 		access.RUnlock()
+ 
+@@ -189,9 +214,8 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		}
+ 
+ 		if certExpired {
+-			newCerts := make([]tls.Certificate, 0, len(c.Certificates))
+-
+ 			access.Lock()
++			newCerts := make([]tls.Certificate, 0, len(c.Certificates))
+ 			for _, certificate := range c.Certificates {
+ 				if !isCertificateExpired(&certificate) {
+ 					newCerts = append(newCerts, certificate)
+@@ -208,7 +232,8 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 		var issuedCertificate *tls.Certificate
+ 
+ 		// Create a new certificate from existing CA if possible
+-		for _, rawCert := range ca {
++		for _, source := range ca {
++			rawCert := source.load()
+ 			if rawCert.Usage == Certificate_AUTHORITY_ISSUE {
+ 				newCert, err := issueCertificate(rawCert, domain)
+ 				if err != nil {
+@@ -244,8 +269,9 @@ func getGetCertificateFunc(c *tls.Config, ca []*Certificate) func(hello *tls.Cli
+ 	}
+ }
+ 
+-func getNewGetCertificateFunc(certs []*tls.Certificate, rejectUnknownSNI bool) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++func getNewGetCertificateFunc(store *certificateStore, rejectUnknownSNI bool) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+ 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
++		certs := store.snapshot()
+ 		if len(certs) == 0 {
+ 			return nil, errNoCertificates
+ 		}
+@@ -412,7 +438,7 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
+ 	if len(caCerts) > 0 {
+ 		config.GetCertificate = getGetCertificateFunc(config, caCerts)
+ 	} else {
+-		config.GetCertificate = getNewGetCertificateFunc(c.BuildCertificates(), c.RejectUnknownSni)
++		config.GetCertificate = getNewGetCertificateFunc(c.buildCertificateStore(), c.RejectUnknownSni)
+ 	}
+ 
+ 	if sn := c.parseServerName(); len(sn) > 0 {

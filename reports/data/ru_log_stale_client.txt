@@ -1,0 +1,33 @@
+before: load=0.64 tx=34Mbit tcp=3557 node=running/0
+1 off solo (217.5, 0.0, 69, 80) rounds 0
+1 off rival (243.2, 198.6, 67, 82) rounds 0
+1 off own4 (0.0, 0.0, -1, -1) rounds 0
+1 on solo (0.0, 0.0, -1, -1) rounds 0
+1 on rival (0.0, 128.5, 1088, 1088) rounds 0
+1 on own4 (0.0, 0.0, -1, -1) rounds 0
+1 compete solo (0.0, 0.0, -1, -1) rounds 0
+1 compete rival (0.0, 124.3, 65, 74) rounds 0
+1 compete own4 (256.6, 0.0, -1, -1) rounds 5
+health: load=0.51 tx=77Mbit tcp=3723 node=running/0
+2 off solo (0.0, 0.0, 1140, 1140) rounds 0
+2 off rival (0.0, 218.6, 63, 71) rounds 0
+2 off own4 (0.0, 0.0, 1146, 1146) rounds 0
+2 on solo (256.1, 0.0, 72, 86) rounds 0
+2 on rival (249.9, 143.8, 108, 184) rounds 0
+2 on own4 (0.0, 0.0, -1, -1) rounds 0
+2 compete solo (0.0, 0.0, 1129, 1129) rounds 0
+2 compete rival (0.0, 214.8, -1, -1) rounds 0
+2 compete own4 (0.0, 0.0, 1173, 1173) rounds 0
+health: load=0.50 tx=135Mbit tcp=3941 node=running/0
+3 off solo (0.0, 0.0, 1130, 1130) rounds 0
+3 off rival (0.0, 100.0, 1068, 1068) rounds 0
+3 off own4 (0.0, 0.0, 1162, 1162) rounds 0
+3 on solo (0.0, 0.0, -1, -1) rounds 0
+3 on rival (301.7, 358.7, -1, -1) rounds 0
+3 on own4 (238.5, 0.0, -1, -1) rounds 0
+3 compete solo (254.6, 0.0, 68, 80) rounds 0
+3 compete rival (77.0, 177.7, 71, 79) rounds 0
+3 compete own4 (0.0, 0.0, -1, -1) rounds 0
+health: load=0.94 tx=68Mbit tcp=3911 node=running/0
+4 off solo (0.0, 0.0, 1152, 1152) rounds 0
+cleanup: ufw_left=0 ports_left=0 dir_left=0 node=running/0

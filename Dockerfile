@@ -1,6 +1,6 @@
 # Официальный образ ноды Remnawave с Infinity Xray.
 # rw-core внутри образа — симлинк на /usr/local/bin/xray, поэтому меняем только его.
-ARG NODE_TAG=3.4.4
+ARG NODE_TAG=3.4.5
 FROM remnawave/node:${NODE_TAG}
 ARG INFINITY_VERSION
 LABEL org.opencontainers.image.title="Infinity Xray" \

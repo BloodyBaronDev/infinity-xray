@@ -1,3 +1,5 @@
 .work/
 out/
 __pycache__/
+.codegraph/
+/reports/real-channel-*/

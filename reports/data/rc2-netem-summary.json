@@ -1,0 +1,314 @@
+[
+  {
+    "experiment": "warm",
+    "rate_mbit": 20,
+    "version": "new",
+    "mode": "C",
+    "n": 5,
+    "down_all_mbit": [
+      10.853652266666668,
+      1.5160661333333334,
+      2.6738687999999997,
+      5.025402133333333,
+      1.4592682666666665
+    ],
+    "median_down_mbit": 2.6738687999999997,
+    "median_successful_probe_p95_ms": 850.8156961492202,
+    "probe_errors": 0,
+    "probe_count": 322,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 20,
+    "version": "new",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      6.046788266666667,
+      7.021090133333334,
+      6.0489728,
+      11.330254133333332,
+      11.1804416
+    ],
+    "median_down_mbit": 7.021090133333334,
+    "median_successful_probe_p95_ms": 1839.7001393997925,
+    "probe_errors": 0,
+    "probe_count": 227,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 20,
+    "version": "old",
+    "mode": "C",
+    "n": 5,
+    "down_all_mbit": [
+      3.4231637333333333,
+      6.5732608,
+      1.6667989333333333,
+      4.762282666666667,
+      4.4075370666666664
+    ],
+    "median_down_mbit": 4.4075370666666664,
+    "median_successful_probe_p95_ms": 629.5578000979731,
+    "probe_errors": 0,
+    "probe_count": 335,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 20,
+    "version": "old",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      5.9572224,
+      1.3948586666666667,
+      6.236602133333334,
+      6.973030400000001,
+      13.586172
+    ],
+    "median_down_mbit": 6.236602133333334,
+    "median_successful_probe_p95_ms": 2169.89265400116,
+    "probe_errors": 0,
+    "probe_count": 205,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 100,
+    "version": "new",
+    "mode": "C",
+    "n": 5,
+    "down_all_mbit": [
+      26.563925333333334,
+      37.47880773333333,
+      15.486466933333334,
+      13.492969866666668,
+      20.19246933333333
+    ],
+    "median_down_mbit": 20.19246933333333,
+    "median_successful_probe_p95_ms": 216.4478402017265,
+    "probe_errors": 0,
+    "probe_count": 583,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 100,
+    "version": "new",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      27.698845866666666,
+      28.254754133333332,
+      63.23787093333333,
+      19.826824533333337,
+      28.752827733333334
+    ],
+    "median_down_mbit": 28.254754133333332,
+    "median_successful_probe_p95_ms": 543.0611325013159,
+    "probe_errors": 0,
+    "probe_count": 513,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 100,
+    "version": "old",
+    "mode": "C",
+    "n": 5,
+    "down_all_mbit": [
+      9.872113866666668,
+      23.7431048,
+      17.301521066666666,
+      23.509947733333334,
+      19.1168512
+    ],
+    "median_down_mbit": 19.1168512,
+    "median_successful_probe_p95_ms": 298.86397725022107,
+    "probe_errors": 0,
+    "probe_count": 572,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "warm",
+    "rate_mbit": 100,
+    "version": "old",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      41.09922026666666,
+      25.028198399999997,
+      18.915371466666667,
+      17.565832533333335,
+      27.116679466666664
+    ],
+    "median_down_mbit": 25.028198399999997,
+    "median_successful_probe_p95_ms": 406.32337140268623,
+    "probe_errors": 0,
+    "probe_count": 549,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "cold",
+    "rate_mbit": 20,
+    "version": "new",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      1.1069781333333333,
+      1.7913173333333332,
+      1.1294037333333333,
+      1.2025272,
+      1.168132
+    ],
+    "median_down_mbit": 1.168132,
+    "median_successful_probe_p95_ms": 1825.6172376000898,
+    "probe_errors": 0,
+    "probe_count": 194,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "cold",
+    "rate_mbit": 20,
+    "version": "old",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      1.1111082666666665,
+      1.048576,
+      1.0769685333333334,
+      2.9635925333333333,
+      1.4313901333333332
+    ],
+    "median_down_mbit": 1.1111082666666665,
+    "median_successful_probe_p95_ms": 1570.7118280508423,
+    "probe_errors": 0,
+    "probe_count": 207,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "cold",
+    "rate_mbit": 100,
+    "version": "new",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      26.634058399999997,
+      15.967955199999999,
+      29.299412800000002,
+      10.4267776,
+      16.274773333333332
+    ],
+    "median_down_mbit": 16.274773333333332,
+    "median_successful_probe_p95_ms": 458.7051116031944,
+    "probe_errors": 0,
+    "probe_count": 520,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  },
+  {
+    "experiment": "cold",
+    "rate_mbit": 100,
+    "version": "old",
+    "mode": "D",
+    "n": 5,
+    "down_all_mbit": [
+      21.358535466666666,
+      16.8700624,
+      28.5238568,
+      17.202107733333335,
+      23.710346666666666
+    ],
+    "median_down_mbit": 21.358535466666666,
+    "median_successful_probe_p95_ms": 412.53397159744054,
+    "probe_errors": 0,
+    "probe_count": 529,
+    "transfer_errors": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "stalls": 0
+  }
+]
