@@ -1,19 +1,26 @@
+<div align="center">
+
 # ⚡ Infinity Xray
+
+**Серверная сборка Xray для Remnawave Node: тихие соединения живут дольше, XHTTP отзывчивее под нагрузкой**
+
+[![Релиз](https://img.shields.io/github/v/release/BloodyBaronDev/infinity-xray?style=flat-square&color=2ea44f&label=релиз)](https://github.com/BloodyBaronDev/infinity-xray/releases/latest)
+![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational?style=flat-square)
+![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Remnawave Node](https://img.shields.io/badge/Remnawave_Node-3.4.5-7c3aed?style=flat-square)
+[![Лицензия](https://img.shields.io/badge/лицензия-MPL_2.0-blue?style=flat-square)](LICENSE)
 
 [English](README.md) · **Русский**
 
-**Серверная сборка Xray: тихие соединения живут дольше, XHTTP отзывчивее под нагрузкой.**
-Работает со стандартными клиентами, в основе — официальный [XTLS/Xray-core](https://github.com/XTLS/Xray-core).
+[Возможности](#-возможности) · [Результаты](#-результаты) · [Установка](#-установка) · [Настройки](#️-настройки) · [Сборка](#-сборка-из-исходников) · [Документация](#-документация)
 
-![Статус](https://img.shields.io/badge/статус-стабильный-brightgreen)
-![Версия](https://img.shields.io/badge/версия-0.2.0-blue)
-![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational)
-![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8)
-![Лицензия](https://img.shields.io/badge/лицензия-MPL%202.0-green)
-[![Релиз](https://img.shields.io/github/v/release/BloodyBaronDev/infinity-xray)](https://github.com/BloodyBaronDev/infinity-xray/releases/latest)
-[![Звёзды](https://img.shields.io/github/stars/BloodyBaronDev/infinity-xray?style=social)](https://github.com/BloodyBaronDev/infinity-xray/stargazers)
+</div>
 
-## ✨ Что внутри
+---
+
+Замена Xray внутри [Remnawave Node](https://github.com/remnawave/node) одной строкой в `docker-compose.yml`. Работает со стандартными клиентами, в основе официальный [XTLS/Xray-core](https://github.com/XTLS/Xray-core).
+
+## ✨ Возможности
 
 | | Функция | Что даёт | Ограничения | Тесты |
 |---|---|---|---|---|
@@ -31,38 +38,108 @@
 | 🌙 | **Плавная остановка** | Принятые соединения дорабатывают до срока | Выключена; не для QUIC | [rc.1](reports/0.2.0-rc.1-test-report.md) |
 | ⏱ | **Сторож запуска** | Зависший Start завершает процесс с кодом 1 | — | — |
 
-Безусловный отзыв не включён: Remnawave Node делает remove/add даже для неизменённого
-пользователя, поэтому отзыв работает только с отсрочкой `XRAY_IC_REVOKE_GRACE`.
-Режим конкуренции governor (`XRAY_XHTTP_FLOW_COMPETE`) экспериментальный и выключен.
+> [!NOTE]
+> Безусловный отзыв не включён: Remnawave Node делает remove/add даже для неизменённого пользователя, поэтому отзыв работает только с отсрочкой `XRAY_IC_REVOKE_GRACE`. Режим конкуренции governor (`XRAY_XHTTP_FLOW_COMPETE`) экспериментальный и выключен.
 
-## 📈 Коротко о результатах
+## 📈 Результаты
 
 | Проверка | Без функции | С функцией |
 |---|---|---|
 | 💓 Простой Hysteria | умирает к 45 с | живо на 330 с |
-| 🔁 Простой XHTTP + mux через CDN А | умирает к 90 с | живо на 330 с |
+| 🔁 Простой XHTTP + mux через CDN | умирает к 90 с | живо на 330 с |
 | 🚦 p95 соседних запросов при скачивании, RTT 50 мс | 2411 мс | 309 мс |
 | 🚦 Скорость при конкурирующем TCP | 84,9 Мбит/с | **34,2 Мбит/с** (цена governor) |
 
-0.2.0-rc.3 на рабочей ноде: 0 рестартов, около 32% одного ядра при ~130 Мбит/с,
-governor срабатывает на XHTTP + REALITY. Сравнения A/B с прошлой версией нет.
+0.2.0-rc.3 на рабочей ноде: 0 рестартов, около 32% одного ядра при ~130 Мбит/с, governor срабатывает на XHTTP + REALITY. Сравнения A/B с прошлой версией нет.
 
-Замеры сделаны на небольших выборках и частично на более ранних сборках.
-Стенды и оговорки: **[TEST_RESULTS.md](TEST_RESULTS.md)** и [отчёты](reports/).
+Замеры сделаны на небольших выборках и частично на более ранних сборках. Стенды и оговорки: **[TEST_RESULTS.md](TEST_RESULTS.md)** и [отчёты](reports/).
 
-## 🚀 Быстрый старт
+## 🐳 Установка
 
-Нужны Python 3.11+, git и Go с автозагрузкой toolchain, для образа — Docker.
+Готовый образ `ghcr.io/bloodybarondev/infinity-xray` собран на базе `remnawave/node:3.4.5`. В сервисе ноды меняется только `image`: порты, секрет панели, тома и остальные настройки остаются прежними.
+
+**Требования:** уже работающая Remnawave Node в Docker Compose, `linux/amd64`.
+
+### 1. Сохраните текущее состояние
+
+Перейдите в каталог ноды (обычно `/opt/remnanode`) и запомните, на чём она работает сейчас:
 
 ```bash
-bash build.sh                # бинарник linux/amd64
-bash build.sh --full-checks  # плюс расширенные тесты governor
-bash build.sh image          # плюс локальный образ для Remnawave Node
+cd /opt/remnanode
+cp docker-compose.yml docker-compose.yml.bak
+docker inspect --format '{{.Image}}' remnanode > previous-image.txt
 ```
 
-На Windows: `python build.py build`.
-Результат: `out/0.2.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`).
-Сценарии ничего не устанавливают и не публикуют.
+### 2. Замените образ
+
+В `docker-compose.yml` поменяйте одну строку:
+
+```diff
+ services:
+   remnanode:
+-    image: remnawave/node:latest
++    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
+```
+
+### 3. Перезапустите ноду
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+> [!WARNING]
+> Перезапуск обрывает текущие соединения клиентов. Делайте это в тихое время.
+
+### 4. Проверьте
+
+```bash
+docker exec remnanode xray version        # должно быть Infinity-Xray/v0.2.0
+docker logs --tail 50 remnanode           # без ошибок запуска
+docker logs remnanode 2>&1 | grep icstats # сводка появляется раз в 60 с
+```
+
+Убедитесь, что нода в панели онлайн, и проверьте реальный трафик клиентом.
+
+### 5. Настройте (по желанию)
+
+Переменные из раздела [Настройки](#️-настройки) задаются в `environment` сервиса:
+
+```yaml
+services:
+  remnanode:
+    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
+    environment:
+      XRAY_IC_USER_MAX_CONNS: "8"               # предел соединений VLESS на пользователя
+      XRAY_IC_METRICS_LISTEN: "127.0.0.1:9550"  # метрики Prometheus, только локально
+```
+
+После правки: `docker compose up -d`.
+
+### ↩️ Откат
+
+```bash
+cp docker-compose.yml.bak docker-compose.yml
+docker compose up -d
+```
+
+Если старый тег уже перезаписан, укажите в `image` ID из `previous-image.txt`.
+
+<details>
+<summary><b>Отдельный бинарник без Docker</b></summary>
+
+На [странице релиза](https://github.com/BloodyBaronDev/infinity-xray/releases/latest) лежат `xray-linux-amd64`, `xray-windows-amd64.exe`, `SHA256SUMS` и `build-info-*.json`.
+
+```bash
+curl -LO https://github.com/BloodyBaronDev/infinity-xray/releases/latest/download/xray-linux-amd64
+curl -LO https://github.com/BloodyBaronDev/infinity-xray/releases/latest/download/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+install -m 755 xray-linux-amd64 /usr/local/bin/xray
+xray version
+```
+
+У отдельного бинарника governor по умолчанию выключен: включите его через `XRAY_XHTTP_FLOW=on`.
+
+</details>
 
 ## ⚙️ Настройки
 
@@ -83,29 +160,21 @@ bash build.sh image          # плюс локальный образ для Rem
 
 Явный `xhttpSettings.extra.h2Flow.enabled` важнее `XRAY_XHTTP_FLOW`.
 
-## 🐳 Установка на ноду
+## 🛠 Сборка из исходников
 
-Готовый образ на базе `remnawave/node:3.4.5`:
-
-```yaml
-services:
-  remnanode:
-    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0   # вместо remnawave/node
-```
+Нужны Python 3.11+, git и Go с автозагрузкой toolchain, для образа — Docker.
 
 ```bash
-docker compose pull && docker compose up -d
+bash build.sh                # бинарник linux/amd64
+bash build.sh --full-checks  # плюс расширенные тесты governor
+bash build.sh image          # плюс локальный образ для Remnawave Node
 ```
 
-В сервисе Remnawave Node меняется только `image`, порты и секреты остаются прежними.
-Перезапуск оборвёт текущие соединения. Заранее сохраните compose и ID старого образа:
-для отката верните прежний образ и пересоздайте сервис.
+На Windows: `python build.py build`. Результат: `out/0.2.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`). Сценарии ничего не устанавливают и не публикуют.
 
-## 📌 База
-
-| Xray-core | Commit | Go | Build tags | Remnawave Node | Цели |
-|---|---|---|---|---|---|
-| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` | `linux/amd64`, `windows/amd64` для локальных проверок |
+| Xray-core | Commit | Go | Build tags | Remnawave Node |
+|---|---|---|---|---|
+| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` |
 
 Сборка сверяет commit базы и SHA256 патча из [`release.json`](release.json).
 
@@ -115,6 +184,8 @@ docker compose pull && docker compose up -d
 - 🛠 [Сборка, правка патча, проверки и выпуск](docs/DEVELOPMENT.md)
 - 📝 [История версий](CHANGELOG.md)
 - 🧾 [Происхождение кода](NOTICE.md)
+
+Нашли ошибку или есть вопрос? Откройте [issue](https://github.com/BloodyBaronDev/infinity-xray/issues). Если сборка пригодилась, ⭐ поможет другим её найти.
 
 ## 📄 Лицензия
 
