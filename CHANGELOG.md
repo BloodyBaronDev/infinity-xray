@@ -1,5 +1,11 @@
 # История Infinity Xray
 
+## 0.3.1 — 2026-11-17
+
+- REALITY принимает ClientHello только с ключом X25519, без X25519MLKEM768. Upstream с конца октября 2026 отбрасывает такие ClientHello как устаревшие, а mihomo 1.19.34 (Clash Verge, FlClash, XKeen на Keenetic) MLKEM не отправляет: клиент видит `REALITY Authentication: false`, сервер отдаёт сертификат сайта-маскировки. Повторный ключ одной группы по-прежнему отклоняется.
+- Модуль `github.com/xtls/reality` перенесён в `third_party/reality` и подключён через `replace`; остальное без изменений.
+- Проверено на рабочей ноде: mihomo 1.19.34 — TCP Reality и gRPC Reality проходят (117–144 мс), Xray 26.11.9 как клиент — HTTP 204.
+
 ## 0.3.0 — 2026-11-17
 
 - Уровни скорости на email, в дополнение к общему лимиту `XRAY_IC_USER_RATE_*`:

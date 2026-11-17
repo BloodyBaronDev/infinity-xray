@@ -13,7 +13,7 @@
   ],
   "patch": {
     "file": "infinity-xray.patch",
-    "sha256": "160405d53afb79ab983f794df6a2d546e66d6a1506f0698c0c4c0ed59ac7f0ee"
+    "sha256": "5bd93a5cfe6c93e8a19292e6a5523d2b694f3722f8c4e9e0e5fe413794f9df69"
   },
   "components": [
     {
