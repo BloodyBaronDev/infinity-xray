@@ -1,6 +1,6 @@
 {
   "name": "Infinity Xray",
-  "status": "release-candidate",
+  "status": "release",
   "upstream": {
     "repository": "https://github.com/XTLS/Xray-core.git",
     "tag": "v26.11.9",
@@ -13,7 +13,7 @@
   ],
   "patch": {
     "file": "infinity-xray.patch",
-    "sha256": "c9d3b56effab6ad5466745bc0f6422ced4413f3804f37bcb3ea89a995a3ec4af"
+    "sha256": "160405d53afb79ab983f794df6a2d546e66d6a1506f0698c0c4c0ed59ac7f0ee"
   },
   "components": [
     {

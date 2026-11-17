@@ -33,7 +33,8 @@
 | 🔐 | **Проверка REALITY** | Ошибочные ключи и short ID отклоняются до запуска слушателя | — | — |
 | 🧱 | **TCP-only Mux.Cool** | UDP к `v1.mux.cool` идёт обычной маршрутизацией | — | — |
 | ⏳ | **Отзыв VLESS с отсрочкой** | Соединения удалённого пользователя закрываются, если ключ не вернулся | Выключен; только VLESS | [rc.1](reports/0.2.0-rc.1-test-report.md) |
-| 🚧 | **Лимиты на пользователя** | Предел соединений VLESS и общей скорости на email | Выключены; одно значение на всех; Vision без splice | [rc.1](reports/0.2.0-rc.1-test-report.md) |
+| 🚧 | **Лимиты на пользователя** | Предел соединений VLESS и общей скорости на email | Выключены; Vision без splice | [rc.1](reports/0.2.0-rc.1-test-report.md) |
+| 🎚 | **Уровни скорости** | Свой лимит для email из списка «бесплатных»; email из списка «без лимита» идут без ограничения скорости; списки перечитываются из файлов без перезапуска | Выключены; открытые соединения остаются на прежнем уровне до переподключения | [0.3.0](CHANGELOG.md) |
 | 📈 | **Метрики Prometheus** | Агрегаты без пользователей и адресов | Выключены; авторизации нет | [rc.1](reports/0.2.0-rc.1-test-report.md) |
 | 🌙 | **Плавная остановка** | Принятые соединения дорабатывают до срока | Выключена; не для QUIC | [rc.1](reports/0.2.0-rc.1-test-report.md) |
 | ⏱ | **Сторож запуска** | Зависший Start завершает процесс с кодом 1 | — | — |
@@ -49,6 +50,8 @@
 | 🔁 Простой XHTTP + mux через CDN | умирает к 90 с | живо на 330 с |
 | 🚦 p95 соседних запросов при скачивании, RTT 50 мс | 2411 мс | 309 мс |
 | 🚦 Скорость при конкурирующем TCP | 84,9 Мбит/с | **34,2 Мбит/с** (цена governor) |
+
+0.3.0 на рабочей ноде за CDN: «бесплатные» при лимите 5 Мбит/с — 4,8–4,9, обычные при 13 Мбит/с — 12,4–12,6, «без лимита» — 72 Мбит/с в 3 потока; после удаления ключа из списка вернулся лимит 13 Мбит/с.
 
 0.2.0-rc.3 на рабочей ноде: 0 рестартов, около 32% одного ядра при ~130 Мбит/с, governor срабатывает на XHTTP + REALITY. Сравнения A/B с прошлой версией нет.
 
@@ -78,7 +81,7 @@ docker inspect --format '{{.Image}}' remnanode > previous-image.txt
  services:
    remnanode:
 -    image: remnawave/node:latest
-+    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
++    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
 ```
 
 ### 3. Перезапустите ноду
@@ -93,7 +96,7 @@ docker compose pull && docker compose up -d
 ### 4. Проверьте
 
 ```bash
-docker exec remnanode xray version        # должно быть Infinity-Xray/v0.2.0
+docker exec remnanode xray version        # должно быть Infinity-Xray/v0.3.0
 docker logs --tail 50 remnanode           # без ошибок запуска
 docker logs remnanode 2>&1 | grep icstats # сводка появляется раз в 60 с
 ```
@@ -107,11 +110,26 @@ docker logs remnanode 2>&1 | grep icstats # сводка появляется р
 ```yaml
 services:
   remnanode:
-    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
     environment:
       XRAY_IC_USER_MAX_CONNS: "8"               # предел соединений VLESS на пользователя
       XRAY_IC_METRICS_LISTEN: "127.0.0.1:9550"  # метрики Prometheus, только локально
 ```
+
+Уровни скорости читаются из обычных файлов: по одному email на строку, `#` — комментарий. Подключите каталог хоста и укажите пути:
+
+```yaml
+    volumes:
+      - /opt/remnanode/ic:/var/lib/ic:ro
+    environment:
+      XRAY_IC_USER_RATE_DOWN_MBPS: "13"
+      XRAY_IC_USER_RATE_UP_MBPS: "13"
+      XRAY_IC_FREE_RATE_MBPS: "5"
+      XRAY_IC_FREE_USERS_FILE: /var/lib/ic/free_users.txt
+      XRAY_IC_UNLIMITED_USERS_FILE: /var/lib/ic/unlimited_users.txt
+```
+
+Файлы перечитываются каждые 5 с при смене времени изменения или размера. Пишите их атомарно (временный файл + `mv`). Пропавший или нечитаемый файл сохраняет прежний список.
 
 После правки: `docker compose up -d`.
 
@@ -154,6 +172,9 @@ xray version
 | `XRAY_IC_USER_MAX_CONNS` | `0` | Предел соединений VLESS на email, mux = одно; 0 отключает |
 | `XRAY_IC_USER_RATE_DOWN_MBPS` | `0` | Общий лимит скачивания на email, Мбит/с; 0 отключает |
 | `XRAY_IC_USER_RATE_UP_MBPS` | `0` | Общий лимит загрузки на email, Мбит/с; 0 отключает |
+| `XRAY_IC_FREE_RATE_MBPS` | `0` | Лимит для email из списка бесплатных, в обе стороны, Мбит/с; 0 отключает |
+| `XRAY_IC_FREE_USERS_FILE` | не задано | Файл списка бесплатных, по email на строку |
+| `XRAY_IC_UNLIMITED_USERS_FILE` | не задано | Email из файла идут без лимитов скорости; важнее списка бесплатных |
 | `XRAY_IC_METRICS_LISTEN` | не задано | Адрес `/metrics`, например `127.0.0.1:9550`; не публикуйте наружу |
 | `XRAY_IC_DRAIN_SECONDS` | `0` | Ожидание соединений при остановке, с; 0 отключает |
 | `XRAY_IC_START_TIMEOUT` | `60` | Предел запуска, с; ≤0 отключает |
@@ -170,7 +191,7 @@ bash build.sh --full-checks  # плюс расширенные тесты govern
 bash build.sh image          # плюс локальный образ для Remnawave Node
 ```
 
-На Windows: `python build.py build`. Результат: `out/0.2.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`). Сценарии ничего не устанавливают и не публикуют.
+На Windows: `python build.py build`. Результат: `out/0.3.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`). Сценарии ничего не устанавливают и не публикуют.
 
 | Xray-core | Commit | Go | Build tags | Remnawave Node |
 |---|---|---|---|---|

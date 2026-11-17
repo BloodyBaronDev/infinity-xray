@@ -33,7 +33,8 @@ Replaces the Xray inside [Remnawave Node](https://github.com/remnawave/node) wit
 | 🔐 | **REALITY validation** | Bad keys and short IDs rejected before the listener starts | — |
 | 🧱 | **TCP-only Mux.Cool** | UDP to `v1.mux.cool` goes through normal routing | — |
 | ⏳ | **Delayed VLESS revoke** | Closes a removed user's connections if the key doesn't return | Off; VLESS only |
-| 🚧 | **Per-user limits** | VLESS connection cap and total rate per email | Off; one value for all; no Vision splice |
+| 🚧 | **Per-user limits** | VLESS connection cap and total rate per email | Off; no Vision splice |
+| 🎚 | **Rate tiers** | Separate rate for emails from a "free" list; emails from an "unlimited" list skip rate limits; lists reload from files without restart | Off; open connections keep the old tier until reconnect |
 | 📈 | **Prometheus metrics** | Aggregates only, no users or addresses | Off; no auth |
 | 🌙 | **Graceful drain** | Accepted connections finish before shutdown | Off; not for QUIC |
 | ⏱ | **Start watchdog** | A hung Start exits the process with code 1 | — |
@@ -48,6 +49,7 @@ Replaces the Xray inside [Remnawave Node](https://github.com/remnawave/node) wit
 | 🚦 Throughput against competing TCP | 84.9 Mbit/s | **34.2 Mbit/s** (governor's cost) |
 
 0.2.0-rc.3 on a production node: 0 restarts, ~32% of one core at ~130 Mbit/s.
+0.3.0 on a production node behind a CDN: "free" at 5 Mbit/s measured 4.8–4.9, regular at 13 Mbit/s measured 12.4–12.6, "unlimited" reached 72 Mbit/s over 3 streams; removing a key from the list restored the 13 Mbit/s limit.
 Small samples, partly on earlier builds. Details and caveats: [TEST_RESULTS.md](TEST_RESULTS.md) (in Russian) and [reports](reports/).
 
 ## 🐳 Install
@@ -74,7 +76,7 @@ Change one line in `docker-compose.yml`:
  services:
    remnanode:
 -    image: remnawave/node:latest
-+    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
++    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
 ```
 
 ### 3. Restart the node
@@ -89,7 +91,7 @@ docker compose pull && docker compose up -d
 ### 4. Verify
 
 ```bash
-docker exec remnanode xray version        # should show Infinity-Xray/v0.2.0
+docker exec remnanode xray version        # should show Infinity-Xray/v0.3.0
 docker logs --tail 50 remnanode           # no startup errors
 docker logs remnanode 2>&1 | grep icstats # a summary appears every 60 s
 ```
@@ -103,11 +105,26 @@ Set variables from [Settings](#️-settings) in the service's `environment`:
 ```yaml
 services:
   remnanode:
-    image: ghcr.io/bloodybarondev/infinity-xray:0.2.0
+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
     environment:
       XRAY_IC_USER_MAX_CONNS: "8"               # VLESS connections per user
       XRAY_IC_METRICS_LISTEN: "127.0.0.1:9550"  # Prometheus metrics, local only
 ```
+
+Rate tiers read plain files, one email per line (`#` starts a comment). Mount a host directory and point the variables at it:
+
+```yaml
+    volumes:
+      - /opt/remnanode/ic:/var/lib/ic:ro
+    environment:
+      XRAY_IC_USER_RATE_DOWN_MBPS: "13"
+      XRAY_IC_USER_RATE_UP_MBPS: "13"
+      XRAY_IC_FREE_RATE_MBPS: "5"
+      XRAY_IC_FREE_USERS_FILE: /var/lib/ic/free_users.txt
+      XRAY_IC_UNLIMITED_USERS_FILE: /var/lib/ic/unlimited_users.txt
+```
+
+Files are re-read every 5 s when their mtime or size changes. Write them atomically (temp file + `mv`). A missing or unreadable file keeps the previous list.
 
 Then run `docker compose up -d`.
 
@@ -150,6 +167,9 @@ The governor is off by default for the standalone binary: enable it with `XRAY_X
 | `XRAY_IC_USER_MAX_CONNS` | `0` | VLESS connections per email, mux counts as one |
 | `XRAY_IC_USER_RATE_DOWN_MBPS` | `0` | Total download limit per email, Mbit/s |
 | `XRAY_IC_USER_RATE_UP_MBPS` | `0` | Total upload limit per email, Mbit/s |
+| `XRAY_IC_FREE_RATE_MBPS` | `0` | Rate for emails from the free list, both directions, Mbit/s |
+| `XRAY_IC_FREE_USERS_FILE` | unset | Free list file, one email per line |
+| `XRAY_IC_UNLIMITED_USERS_FILE` | unset | Emails in this file skip all rate limits; wins over the free list |
 | `XRAY_IC_METRICS_LISTEN` | unset | `/metrics` address, e.g. `127.0.0.1:9550`; don't expose publicly |
 | `XRAY_IC_DRAIN_SECONDS` | `0` | Wait for connections on shutdown, s |
 | `XRAY_IC_START_TIMEOUT` | `60` | Start limit, s; ≤0 disables |

@@ -682,12 +682,153 @@ index 0000000..8587e8e
 +		t.Fatal("параллельные записи потеряли счётчик или максимум")
 +	}
 +}
+diff --git a/common/icusers/freelist.go b/common/icusers/freelist.go
+new file mode 100644
+index 0000000..d4f64a3
+--- /dev/null
++++ b/common/icusers/freelist.go
+@@ -0,0 +1,77 @@
++package icusers
++
++import (
++	"bufio"
++	"os"
++	"strings"
++	"sync/atomic"
++	"time"
++
++	"github.com/xtls/xray-core/common/errors"
++)
++
++// freeList — набор email бесплатных пользователей из файла, по строке на email.
++// Файл перечитывается при смене mtime/размера; пропавший или битый файл оставляет прежний набор.
++type freeList struct {
++	path  string
++	label string // подпись в логе: "free users", "unlimited users"
++	set   atomic.Pointer[map[string]struct{}]
++}
++
++var freeReload = 5 * time.Second
++
++func newFreeList(path string) *freeList {
++	return newUserList(path, "free users")
++}
++
++// newUserList — тот же файловый список email с другой подписью в логе.
++func newUserList(path, label string) *freeList {
++	if path == "" {
++		return nil
++	}
++	f := &freeList{path: path, label: label}
++	empty := map[string]struct{}{}
++	f.set.Store(&empty)
++	var mod time.Time
++	var size int64 = -1
++	mod, size = f.reload(mod, size)
++	go func() {
++		for range time.Tick(freeReload) {
++			mod, size = f.reload(mod, size)
++		}
++	}()
++	return f
++}
++
++func (f *freeList) reload(mod time.Time, size int64) (time.Time, int64) {
++	st, err := os.Stat(f.path)
++	if err != nil || (st.ModTime().Equal(mod) && st.Size() == size) {
++		return mod, size
++	}
++	file, err := os.Open(f.path)
++	if err != nil {
++		return mod, size
++	}
++	defer file.Close()
++	set := map[string]struct{}{}
++	sc := bufio.NewScanner(file)
++	for sc.Scan() {
++		if line := strings.TrimSpace(sc.Text()); line != "" && !strings.HasPrefix(line, "#") {
++			set[line] = struct{}{}
++		}
++	}
++	if sc.Err() != nil {
++		return mod, size
++	}
++	f.set.Store(&set)
++	errors.LogWarning(nil, "[icusers] ", f.label, ": ", len(set))
++	return st.ModTime(), st.Size()
++}
++
++func (f *freeList) has(email string) bool {
++	if f == nil {
++		return false
++	}
++	_, ok := (*f.set.Load())[email]
++	return ok
++}
+diff --git a/common/icusers/freelist_test.go b/common/icusers/freelist_test.go
+new file mode 100644
+index 0000000..e03b7d4
+--- /dev/null
++++ b/common/icusers/freelist_test.go
+@@ -0,0 +1,52 @@
++package icusers
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func TestFreeListReloadAndBuckets(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "free.txt")
++	os.WriteFile(path, []byte("# бесплатные\n142\n 7 \n"), 0o644)
++	f := newFreeList(path)
++	if !f.has("142") || !f.has("7") || f.has("8") {
++		t.Fatal("список не прочитан")
++	}
++	// Перевод в платные: файл переписан, набор обновился.
++	os.WriteFile(path, []byte("7\n"), 0o644)
++	future := time.Now().Add(time.Minute)
++	os.Chtimes(path, future, future)
++	f.reload(time.Time{}, -1)
++	if f.has("142") || !f.has("7") {
++		t.Fatal("список не перечитан")
++	}
++	// Пропавший файл не сбрасывает набор.
++	os.Remove(path)
++	f.reload(time.Time{}, -1)
++	if !f.has("7") {
++		t.Fatal("набор потерян при пропаже файла")
++	}
++	var nilList *freeList
++	if nilList.has("7") {
++		t.Fatal("nil-список не пуст")
++	}
++
++	oldFree, oldList, oldDown := rateFree, freeUsers, rateDown
++	defer func() { rateFree, freeUsers, rateDown = oldFree, oldList, oldDown }()
++	rateFree, freeUsers, rateDown = 5e6/8, f, 13e6/8
++	if b := DownlinkBucket("7"); b == nil || b.rate != 5e6/8 {
++		t.Fatal("бесплатному не дан лимит бесплатных")
++	}
++	if b := DownlinkBucket("142"); b == nil || b.rate != 13e6/8 {
++		t.Fatal("платному не дан общий лимит")
++	}
++	rateDown = 0
++	if DownlinkBucket("143") != nil {
++		t.Fatal("платный без общего лимита должен быть без ведра")
++	}
++	if !RateLimited() {
++		t.Fatal("RateLimited должен учитывать лимит бесплатных")
++	}
++}
 diff --git a/common/icusers/icusers.go b/common/icusers/icusers.go
 new file mode 100644
-index 0000000..26379ba
+index 0000000..166963b
 --- /dev/null
 +++ b/common/icusers/icusers.go
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,290 @@
 +// Package icusers holds per-user server policy of Infinity Xray: delayed
 +// revocation of removed users, a connection limit and a shared rate limit.
 +// Everything is off unless enabled through the environment at process start.
@@ -695,6 +836,7 @@ index 0000000..26379ba
 +
 +import (
 +	"context"
++	"os"
 +	"sync"
 +	"time"
 +
@@ -928,16 +1070,40 @@ index 0000000..26379ba
 +var (
 +	rateUp   = float64(icstats.EnvSeconds("XRAY_IC_USER_RATE_UP_MBPS", 0)) * 1e6 / 8
 +	rateDown = float64(icstats.EnvSeconds("XRAY_IC_USER_RATE_DOWN_MBPS", 0)) * 1e6 / 8
-+	buckets  sync.Map // "u"/"d" + email -> *Bucket
++	// Бесплатные: свой лимит в обе стороны для email из файла XRAY_IC_FREE_USERS_FILE.
++	rateFree  = float64(icstats.EnvSeconds("XRAY_IC_FREE_RATE_MBPS", 0)) * 1e6 / 8
++	freeUsers = newFreeList(os.Getenv("XRAY_IC_FREE_USERS_FILE"))
++	// Без лимита: email из файла XRAY_IC_UNLIMITED_USERS_FILE не получают ведро скорости.
++	unlimitedUsers = newUserList(os.Getenv("XRAY_IC_UNLIMITED_USERS_FILE"), "unlimited users")
++	buckets        sync.Map // "u"/"d" + "f"/"p" + email -> *Bucket
 +)
 +
 +// RateLimited reports whether any user rate limit is on.
 +func RateLimited() bool {
-+	return rateUp > 0 || rateDown > 0
++	return rateUp > 0 || rateDown > 0 || (rateFree > 0 && freeUsers != nil)
++}
++
++// IsFree reports whether email is in the free users file.
++func IsFree(email string) bool {
++	return rateFree > 0 && freeUsers.has(email)
++}
++
++// IsUnlimited reports whether email is in the unlimited users file.
++func IsUnlimited(email string) bool {
++	return unlimitedUsers.has(email)
 +}
 +
 +func bucketFor(prefix, email string, rate float64) *Bucket {
-+	if rate <= 0 || email == "" {
++	if email == "" || IsUnlimited(email) {
++		return nil
++	}
++	// Тариф входит в ключ: после смены тарифа новые соединения берут новое ведро.
++	if IsFree(email) {
++		prefix, rate = prefix+"f", rateFree
++	} else {
++		prefix += "p"
++	}
++	if rate <= 0 {
 +		return nil
 +	}
 +	key := prefix + email
@@ -1091,6 +1257,54 @@ index 0000000..d9f0dd3
 +	cancel()
 +	if err := b.Wait(ctx, 1<<30); err == nil {
 +		t.Fatal("wait ignored cancelled context")
++	}
++}
+diff --git a/common/icusers/unlimited_test.go b/common/icusers/unlimited_test.go
+new file mode 100644
+index 0000000..60e41d8
+--- /dev/null
++++ b/common/icusers/unlimited_test.go
+@@ -0,0 +1,42 @@
++package icusers
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func TestUnlimitedListSkipsBuckets(t *testing.T) {
++	dir := t.TempDir()
++	freePath, unlimPath := filepath.Join(dir, "free.txt"), filepath.Join(dir, "unlimited.txt")
++	os.WriteFile(freePath, []byte("7\n"), 0o644)
++	os.WriteFile(unlimPath, []byte("# без лимита\n42\n7\n"), 0o644)
++
++	oldFree, oldList, oldUnlim, oldDown, oldUp := rateFree, freeUsers, unlimitedUsers, rateDown, rateUp
++	defer func() { rateFree, freeUsers, unlimitedUsers, rateDown, rateUp = oldFree, oldList, oldUnlim, oldDown, oldUp }()
++	rateFree, rateDown, rateUp = 5e6/8, 13e6/8, 13e6/8
++	freeUsers, unlimitedUsers = newFreeList(freePath), newUserList(unlimPath, "unlimited users")
++
++	if DownlinkBucket("42") != nil || UplinkBucket("42") != nil {
++		t.Fatal("ключ без лимита получил ведро")
++	}
++	if DownlinkBucket("7") != nil {
++		t.Fatal("список без лимита должен быть важнее списка бесплатных")
++	}
++	if b := DownlinkBucket("100"); b == nil || b.rate != 13e6/8 {
++		t.Fatal("обычный платный потерял общий лимит")
++	}
++	// Ключ убрали из списка: новые соединения снова с лимитом.
++	os.WriteFile(unlimPath, []byte("7\n"), 0o644)
++	future := time.Now().Add(time.Minute)
++	os.Chtimes(unlimPath, future, future)
++	unlimitedUsers.reload(time.Time{}, -1)
++	if b := DownlinkBucket("42"); b == nil || b.rate != 13e6/8 {
++		t.Fatal("после удаления из списка лимит не вернулся")
++	}
++	var none *freeList
++	if none.has("42") {
++		t.Fatal("nil-список не пуст")
 +	}
 +}
 diff --git a/common/mux/ic_write_test.go b/common/mux/ic_write_test.go
