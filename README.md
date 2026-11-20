@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/BloodyBaronDev/infinity-xray?style=flat-square&color=2ea44f)](https://github.com/BloodyBaronDev/infinity-xray/releases/latest)
 ![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational?style=flat-square)
 ![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat-square&logo=go&logoColor=white)
-![Remnawave Node](https://img.shields.io/badge/Remnawave_Node-3.4.5-7c3aed?style=flat-square)
+![Remnawave Node](https://img.shields.io/badge/Remnawave_Node-3.4.6-7c3aed?style=flat-square)
 [![License](https://img.shields.io/badge/license-MPL_2.0-blue?style=flat-square)](LICENSE)
 
 **English** · [Русский](README.ru.md)
@@ -54,7 +54,7 @@ Small samples, partly on earlier builds. Details and caveats: [TEST_RESULTS.md](
 
 ## 🐳 Install
 
-The `ghcr.io/bloodybarondev/infinity-xray` image is built on `remnawave/node:3.4.5`. Only the service's `image` changes: ports, panel secret, volumes and everything else stay as they are.
+The `ghcr.io/bloodybarondev/infinity-xray` image is built on `remnawave/node:3.4.6`. Only the service's `image` changes: ports, panel secret, volumes and everything else stay as they are.
 
 **Requirements:** a working Remnawave Node on Docker Compose, `linux/amd64`.
 
@@ -76,7 +76,7 @@ Change one line in `docker-compose.yml`:
  services:
    remnanode:
 -    image: remnawave/node:latest
-+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
++    image: ghcr.io/bloodybarondev/infinity-xray:0.3.2
 ```
 
 ### 3. Restart the node
@@ -91,7 +91,7 @@ docker compose pull && docker compose up -d
 ### 4. Verify
 
 ```bash
-docker exec remnanode xray version        # should show Infinity-Xray/v0.3.0
+docker exec remnanode xray version        # should show Infinity-Xray/v0.3.2
 docker logs --tail 50 remnanode           # no startup errors
 docker logs remnanode 2>&1 | grep icstats # a summary appears every 60 s
 ```
@@ -105,7 +105,7 @@ Set variables from [Settings](#️-settings) in the service's `environment`:
 ```yaml
 services:
   remnanode:
-    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.2
     environment:
       XRAY_IC_USER_MAX_CONNS: "8"               # VLESS connections per user
       XRAY_IC_METRICS_LISTEN: "127.0.0.1:9550"  # Prometheus metrics, local only
@@ -190,7 +190,7 @@ On Windows: `python build.py build`. Output: `out/<version>/linux-amd64/`. The s
 
 | Xray-core | Commit | Go | Build tags | Remnawave Node |
 |---|---|---|---|---|
-| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` |
+| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.6` |
 
 The build checks the upstream commit and patch SHA256 from [`release.json`](release.json).
 

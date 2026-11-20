@@ -7,7 +7,7 @@
 [![Релиз](https://img.shields.io/github/v/release/BloodyBaronDev/infinity-xray?style=flat-square&color=2ea44f&label=релиз)](https://github.com/BloodyBaronDev/infinity-xray/releases/latest)
 ![Xray](https://img.shields.io/badge/Xray-v26.11.9-informational?style=flat-square)
 ![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat-square&logo=go&logoColor=white)
-![Remnawave Node](https://img.shields.io/badge/Remnawave_Node-3.4.5-7c3aed?style=flat-square)
+![Remnawave Node](https://img.shields.io/badge/Remnawave_Node-3.4.6-7c3aed?style=flat-square)
 [![Лицензия](https://img.shields.io/badge/лицензия-MPL_2.0-blue?style=flat-square)](LICENSE)
 
 [English](README.md) · **Русский**
@@ -59,7 +59,7 @@
 
 ## 🐳 Установка
 
-Готовый образ `ghcr.io/bloodybarondev/infinity-xray` собран на базе `remnawave/node:3.4.5`. В сервисе ноды меняется только `image`: порты, секрет панели, тома и остальные настройки остаются прежними.
+Готовый образ `ghcr.io/bloodybarondev/infinity-xray` собран на базе `remnawave/node:3.4.6`. В сервисе ноды меняется только `image`: порты, секрет панели, тома и остальные настройки остаются прежними.
 
 **Требования:** уже работающая Remnawave Node в Docker Compose, `linux/amd64`.
 
@@ -81,7 +81,7 @@ docker inspect --format '{{.Image}}' remnanode > previous-image.txt
  services:
    remnanode:
 -    image: remnawave/node:latest
-+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
++    image: ghcr.io/bloodybarondev/infinity-xray:0.3.2
 ```
 
 ### 3. Перезапустите ноду
@@ -96,7 +96,7 @@ docker compose pull && docker compose up -d
 ### 4. Проверьте
 
 ```bash
-docker exec remnanode xray version        # должно быть Infinity-Xray/v0.3.0
+docker exec remnanode xray version        # должно быть Infinity-Xray/v0.3.2
 docker logs --tail 50 remnanode           # без ошибок запуска
 docker logs remnanode 2>&1 | grep icstats # сводка появляется раз в 60 с
 ```
@@ -110,7 +110,7 @@ docker logs remnanode 2>&1 | grep icstats # сводка появляется р
 ```yaml
 services:
   remnanode:
-    image: ghcr.io/bloodybarondev/infinity-xray:0.3.0
+    image: ghcr.io/bloodybarondev/infinity-xray:0.3.2
     environment:
       XRAY_IC_USER_MAX_CONNS: "8"               # предел соединений VLESS на пользователя
       XRAY_IC_METRICS_LISTEN: "127.0.0.1:9550"  # метрики Prometheus, только локально
@@ -191,11 +191,11 @@ bash build.sh --full-checks  # плюс расширенные тесты govern
 bash build.sh image          # плюс локальный образ для Remnawave Node
 ```
 
-На Windows: `python build.py build`. Результат: `out/0.3.0/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`). Сценарии ничего не устанавливают и не публикуют.
+На Windows: `python build.py build`. Результат: `out/0.3.2/linux-amd64/` (`xray`, `SHA256SUMS`, `build-info.json`). Сценарии ничего не устанавливают и не публикуют.
 
 | Xray-core | Commit | Go | Build tags | Remnawave Node |
 |---|---|---|---|---|
-| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.5` |
+| `v26.11.9` | `676eaf6` | `go1.27.3` | `http2legacy` | `3.4.6` |
 
 Сборка сверяет commit базы и SHA256 патча из [`release.json`](release.json).
 
